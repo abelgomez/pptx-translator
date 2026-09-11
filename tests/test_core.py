@@ -162,6 +162,45 @@ class LogLevelResolutionTests(unittest.TestCase):
         self.assertEqual(_resolve_log_level(2, "ERROR"), logging.DEBUG)
 
 
+class PresentationFormattingTests(unittest.TestCase):
+    def test_adjacent_runs_with_same_format_are_merged_before_translation(self):
+        class _StubTranslator(BaseTranslator):
+            name = "stub"
+
+            def _translate_slide(
+                self,
+                texts,
+                source_lang,
+                target_lang,
+                context=None,
+                exception_rules=None,
+            ):
+                return {text: "Translated text" for text in texts}
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_path = Path(tmp_dir) / "merge_runs.pptx"
+            output_path = Path(tmp_dir) / "merge_runs_en.pptx"
+
+            prs = Presentation()
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            textbox = slide.shapes.add_textbox(10, 10, 200, 100)
+            paragraph = textbox.text_frame.paragraphs[0]
+            run_a = paragraph.add_run()
+            run_a.text = "Conocer la"
+            run_b = paragraph.add_run()
+            run_b.text = " estructura"
+
+            prs.save(input_path)
+            PresentationTranslator(_StubTranslator()).translate(
+                str(input_path), str(output_path), target_lang="en", source_lang="es"
+            )
+
+            translated = Presentation(output_path)
+            out_paragraph = translated.slides[0].shapes[0].text_frame.paragraphs[0]
+            self.assertEqual(len(out_paragraph.runs), 1)
+            self.assertEqual(out_paragraph.text, "Translated text")
+
+
 class FigureHeuristicTests(unittest.TestCase):
     def test_short_multiline_small_box_is_figure(self):
         result = looks_like_figure_label(
@@ -251,6 +290,46 @@ class ParagraphRunFormattingTests(unittest.TestCase):
             self.assertTrue(paragraph.runs[0].font.bold)
             self.assertEqual(paragraph.runs[1].text, " TR:importante")
             self.assertTrue(paragraph.runs[1].font.italic)
+
+    def test_merged_same_style_runs_preserve_boundary_spaces(self):
+        class _StubTranslator(BaseTranslator):
+            name = "stub"
+
+            def _translate_slide(
+                self,
+                texts,
+                source_lang,
+                target_lang,
+                context=None,
+                exception_rules=None,
+            ):
+                return {text: f"TR:{text}" for text in texts}
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_path = Path(tmp_dir) / "boundary_space_test.pptx"
+            output_path = Path(tmp_dir) / "boundary_space_test_en.pptx"
+
+            prs = Presentation()
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            textbox = slide.shapes.add_textbox(10, 10, 300, 100)
+            paragraph = textbox.text_frame.paragraphs[0]
+
+            first_run = paragraph.add_run()
+            first_run.text = "Conocer "
+            first_run.font.bold = True
+            second_run = paragraph.add_run()
+            second_run.text = "la"
+            second_run.font.bold = True
+
+            prs.save(input_path)
+
+            PresentationTranslator(_StubTranslator()).translate(
+                str(input_path), str(output_path), target_lang="en", source_lang="es"
+            )
+
+            output_prs = Presentation(output_path)
+            output_paragraph = output_prs.slides[0].shapes[0].text_frame.paragraphs[0]
+            self.assertEqual(output_paragraph.text, "TR:Conocer la")
 
     def test_regular_text_boxes_enable_word_wrap_and_autosize(self):
         class _StubTranslator(BaseTranslator):

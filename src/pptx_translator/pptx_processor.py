@@ -38,11 +38,10 @@ class TranslationJob:
     """A pending unit of work to translate.
 
     ``kind`` is either ``"paragraph"`` (translates and rewrites a single
-    paragraph, preserving its structure), ``"paragraph_run"`` (translates
-    a single styled run inside a paragraph while keeping that run's own
-    formatting), or ``"figure"`` (translates the full text of a text box
-    and rewrites it as a single paragraph, automatically resizing the text
-    to fit the shape).
+    paragraph), ``"paragraph_run"`` (translates one styled run or a
+    contiguous run block whose formatting is identical), or ``"figure"``
+    (translates the full text of a text box and rewrites it as a single
+    paragraph, automatically resizing the text to fit the shape).
     """
 
     kind: str
@@ -74,6 +73,15 @@ def _clean_joined_text(text: str) -> str:
     return text.strip()
 
 
+def _normalize_text_preserving_boundary_spaces(text: str) -> str:
+    """Normalizes repeated whitespace without stripping the leading/trailing
+    spaces that may be carried by a run at the paragraph boundary.
+    """
+
+    text = text.replace("\v", " ").replace("\x0b", " ")
+    return _WHITESPACE_RE.sub(" ", text)
+
+
 def _paragraph_plain_text(paragraph) -> str:
     return _clean_joined_text(paragraph.text)
 
@@ -85,6 +93,34 @@ def _paragraph_has_text_run(paragraph) -> bool:
     """
 
     return paragraph._p.find(qn("a:r")) is not None  # noqa: SLF001
+
+
+def _run_style_signature(run) -> tuple:
+    """Returns a stable signature for a run's visual formatting.
+
+    Adjacent runs whose formatting is exactly identical can be safely merged
+    into a single translation unit without losing style fidelity.
+    """
+
+    font = run.font
+    r_pr = run._r.find(qn("a:rPr"))  # noqa: SLF001
+    color = None
+    if r_pr is not None:
+        solid_fill = r_pr.find(qn("a:solidFill"))
+        if solid_fill is not None:
+            color_elem = solid_fill.find(qn("a:srgbClr"))
+            if color_elem is not None:
+                color = color_elem.get("val")
+    return (
+        getattr(font, "name", None),
+        getattr(font, "size", None),
+        bool(getattr(font, "bold", False)),
+        bool(getattr(font, "italic", False)),
+        bool(getattr(font, "underline", False)),
+        color,
+        getattr(font, "all_caps", None),
+        getattr(font, "small_caps", None),
+    )
 
 
 def _iter_shapes_recursive(shapes, in_group: bool):
@@ -399,31 +435,68 @@ class PresentationTranslator:
                     plain = _clean_joined_text(raw_text)
                     leading_ws = raw_text[: len(raw_text) - len(raw_text.lstrip())]
                     trailing_ws = raw_text[len(raw_text.rstrip()) :]
+                    if not plain:
+                        continue
                     runs.append((run, plain, leading_ws, trailing_ws))
-                if len(runs) > 1:
-                    for run, plain, leading_ws, trailing_ws in runs:
-                        job = TranslationJob(
-                            "paragraph_run",
-                            paragraph,
-                            plain,
-                            text_frame=text_frame,
-                            slide_index=slide_index,
-                        )
-                        job.run_segments = [(run, plain, leading_ws, trailing_ws)]
-                        jobs.append(job)
+
+                if not runs:
                     continue
 
-                plain = _paragraph_plain_text(paragraph)
-                if plain:
-                    jobs.append(
-                        TranslationJob(
-                            "paragraph",
-                            paragraph,
-                            plain,
-                            text_frame=text_frame,
-                            slide_index=slide_index,
-                        )
+                groups: list[list[tuple[object, str, str, str]]] = []
+                current_group: list[tuple[object, str, str, str]] = []
+                current_key = None
+                for run, plain, leading_ws, trailing_ws in runs:
+                    key = _run_style_signature(run)
+                    if current_group and key != current_key:
+                        groups.append(current_group)
+                        current_group = []
+                    if not current_group:
+                        current_key = key
+                    current_group.append((run, plain, leading_ws, trailing_ws))
+                if current_group:
+                    groups.append(current_group)
+
+                for group in groups:
+                    group_parts: list[str] = []
+                    for index, (_, plain, leading_ws, trailing_ws) in enumerate(group):
+                        if index == 0:
+                            group_parts.append(plain)
+                            continue
+
+                        previous_trailing_ws = group[index - 1][3]
+                        boundary_ws = ""
+                        if previous_trailing_ws and leading_ws:
+                            boundary_ws = " "
+                        elif previous_trailing_ws:
+                            boundary_ws = previous_trailing_ws
+                        elif leading_ws:
+                            boundary_ws = leading_ws
+
+                        group_parts.append(f"{boundary_ws}{plain}")
+
+                    group_plain = "".join(group_parts)
+                    job = TranslationJob(
+                        "paragraph_run",
+                        paragraph,
+                        group_plain,
+                        text_frame=text_frame,
+                        slide_index=slide_index,
                     )
+                    job.run_segments = group
+                    jobs.append(job)
+
+                if not groups:
+                    plain = _paragraph_plain_text(paragraph)
+                    if plain:
+                        jobs.append(
+                            TranslationJob(
+                                "paragraph",
+                                paragraph,
+                                plain,
+                                text_frame=text_frame,
+                                slide_index=slide_index,
+                            )
+                        )
         return jobs
 
     # -- Translation and writing ------------------------------------------
@@ -504,8 +577,19 @@ class PresentationTranslator:
                 _set_text_frame_single_text(job.target, translated_text)
                 _apply_text_frame_fit(job.text_frame or job.target, translated_text)
             elif job.kind == "paragraph_run":
-                original_run, _, leading_ws, trailing_ws = job.run_segments[0]
-                original_run.text = f"{leading_ws}{translated_text}{trailing_ws}"
+                runs = [run for run, _, _, _ in job.run_segments]
+                if not runs:
+                    continue
+                first_run = runs[0]
+                if len(job.run_segments) == 1:
+                    _, _, leading_ws, trailing_ws = job.run_segments[0]
+                    first_run.text = f"{leading_ws}{translated_text}{trailing_ws}"
+                else:
+                    _, _, first_leading_ws, _ = job.run_segments[0]
+                    _, _, _, last_trailing_ws = job.run_segments[-1]
+                    first_run.text = f"{first_leading_ws}{translated_text}{last_trailing_ws}"
+                for extra_run in runs[1:]:
+                    extra_run._r.getparent().remove(extra_run._r)  # noqa: SLF001
                 _apply_text_frame_fit(job.text_frame, translated_text)
             else:
                 _set_paragraph_text(job.target, translated_text)
