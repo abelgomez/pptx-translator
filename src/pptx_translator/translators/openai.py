@@ -40,6 +40,7 @@ class OpenAITranslator(BaseTranslator):
         self.api_key = (api_key or os.getenv("TRANSLATOR_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
         self.api_base_url = (api_base_url or os.getenv("TRANSLATOR_API_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
         self.model = model or os.getenv("TRANSLATOR_MODEL") or "gpt-4o-mini"
+        self._protected_replacements: dict[str, str] = {}
         if not self.api_key:
             raise ValueError(
                 "An API key is required for remote translation providers. "
@@ -77,16 +78,39 @@ class OpenAITranslator(BaseTranslator):
 
         return content.strip()
 
-    def _build_system_content(self, context: str | None = None) -> str:
+    def _build_system_content(
+        self,
+        context: str | None = None,
+        protected_replacements: dict[str, str] | None = None,
+    ) -> str:
+        protected_replacements = protected_replacements or getattr(self, "_protected_replacements", {})
+        replacement_text = ""
+        if protected_replacements:
+            protected_entries = [
+                f"{token} -> {value}"
+                for token, value in sorted(
+                    protected_replacements.items(),
+                    key=lambda item: len(item[0]),
+                    reverse=True,
+                )
+            ]
+            replacement_text = (
+                "Protected identifiers that must remain exactly unchanged and must be restored verbatim are: "
+                + "; ".join(protected_entries)
+                + ". "
+            )
+
         protected_guidance = (
             "Protected placeholders are not ordinary words: they are internal markers that must remain exactly unchanged, including their casing, spacing, and punctuation. "
             "Do not translate, split, expand, paraphrase, or alter any placeholder token such as zqkpptx...vxq, and do not insert any extra spaces around them. "
-            "Treat them as immutable fixed identifiers."
+            "Treat them as immutable fixed identifiers. "
         )
         base = (
             "You are a specialist technical translator for PowerPoint slides and presentation materials. "
             "Translate accurately and idiomatically for the target language, while preserving meaning, technical conventions, and the exact structure of fixed labels and protected terms. "
-            "Return only plain translated text. " + protected_guidance
+            "Return only plain translated text. "
+            + replacement_text
+            + protected_guidance
         )
         if not context:
             return base
@@ -97,6 +121,16 @@ class OpenAITranslator(BaseTranslator):
             "Use this context to preserve the correct domain terminology, title conventions, author names, affiliations, and presentation-specific phrasing. "
             + base
         )
+
+    def _restore_protected_replacements(self, text: str) -> str:
+        replacements = getattr(self, "_protected_replacements", {})
+        if not replacements:
+            return text
+
+        restored = text
+        for token, value in sorted(replacements.items(), key=lambda item: len(item[0]), reverse=True):
+            restored = re.sub(re.escape(token), lambda _m, v=value: v, restored, flags=re.IGNORECASE)
+        return restored
 
     def _translate_one(
         self,
@@ -129,7 +163,10 @@ class OpenAITranslator(BaseTranslator):
             "messages": [
                 {
                     "role": "system",
-                    "content": self._build_system_content(context),
+                    "content": self._build_system_content(
+                        context,
+                        getattr(self, "_protected_replacements", {}),
+                    ),
                 },
                 {"role": "user", "content": prompt},
             ],
@@ -152,12 +189,10 @@ class OpenAITranslator(BaseTranslator):
             raise TranslationError(f"Invalid JSON response from remote provider: {response.text}") from exc
 
         translated = self._extract_text(data)
+        translated = self._restore_protected_replacements(translated)
         protected_token_pattern = re.compile(r"zqkpptx[a-z]+vxq", re.IGNORECASE)
         if protected_token_pattern.search(translated):
             logger.warning(
                 "OpenAI response still contains protected exception placeholders; restoring protected fragments after translation."
             )
-            # The caller already applied exception masking and restoration in
-            # the presentation pipeline, but we guard here for any remnant
-            # placeholder leakage from the model response itself.
         return translated
