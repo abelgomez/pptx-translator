@@ -299,6 +299,39 @@ class CliLoggingTests(unittest.TestCase):
 
 
 class CliBatchProcessingTests(unittest.TestCase):
+    def test_should_skip_translation_when_file_already_matches_target_suffix(self):
+        from pptx_translator.cli import _should_skip_translation
+
+        self.assertTrue(_should_skip_translation(Path("demo_en.pptx"), "en"))
+        self.assertTrue(_should_skip_translation(Path("demo_EN.pptx"), "en"))
+        self.assertFalse(_should_skip_translation(Path("demo.pptx"), "en"))
+        self.assertFalse(_should_skip_translation(Path("demo_es.pptx"), "en"))
+
+    def test_skips_files_already_named_for_target_language_and_logs_warning(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            already_translated = root / "presentation_en.pptx"
+            already_translated.write_bytes(b"pptx")
+
+            with patch("pptx_translator.cli.create_translator") as mock_factory, patch(
+                "pptx_translator.cli.PresentationTranslator"
+            ) as mock_translator_cls, patch("pptx_translator.cli.logging.getLogger") as mock_get_logger:
+                mock_logger = unittest.mock.Mock()
+                mock_get_logger.return_value = mock_logger
+                mock_factory.return_value.name = "stub"
+
+                result = __import__("pptx_translator.cli", fromlist=["main"]).main(
+                    [str(root), "-t", "en"]
+                )
+
+            self.assertEqual(result, 0)
+            self.assertEqual(mock_translator_cls.call_count, 0)
+            mock_logger.warning.assert_any_call(
+                "Skipping file '%s': it already ends with the target-language suffix '_%s'.",
+                already_translated,
+                "en",
+            )
+
     def test_directory_without_recursive_only_processes_top_level_ppts(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

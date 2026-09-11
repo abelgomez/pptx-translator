@@ -18,6 +18,11 @@ def _default_output_path(input_path: Path, target_lang: str) -> Path:
     return input_path.with_name(f"{input_path.stem}_{target_lang.lower()}{suffix}")
 
 
+def _should_skip_translation(input_path: Path, target_lang: str) -> bool:
+    suffix = f"_{target_lang.lower()}"
+    return input_path.suffix.lower() == ".pptx" and input_path.stem.lower().endswith(suffix)
+
+
 def _iter_pptx_files(input_path: Path, recursive: bool) -> list[Path]:
     if input_path.is_file():
         return [input_path] if input_path.suffix.lower() == ".pptx" else []
@@ -286,6 +291,14 @@ def main(argv: list[str] | None = None) -> int:
 
     total_failed = 0
     for index, file_path in enumerate(files_to_process, start=1):
+        if _should_skip_translation(file_path, args.target):
+            logger.warning(
+                "Skipping file '%s': it already ends with the target-language suffix '_%s'.",
+                file_path,
+                args.target.lower(),
+            )
+            continue
+
         output_path = _default_output_path(file_path, args.target)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
