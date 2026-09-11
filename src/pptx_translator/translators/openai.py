@@ -14,6 +14,32 @@ from .base import BaseTranslator, TranslationError
 
 logger = logging.getLogger(__name__)
 
+_SUPPORTED_LANGUAGE_NAMES = {
+    "es": "Spanish",
+    "en": "English",
+    "fr": "French",
+    "de": "German",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "ca": "Catalan",
+    "gl": "Galician",
+    "eu": "Basque",
+    "zh": "Chinese",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "ar": "Arabic",
+    "ru": "Russian",
+    "pl": "Polish",
+    "nl": "Dutch",
+    "sv": "Swedish",
+}
+
+
+def _language_name(code: str | None) -> str:
+    if not code:
+        return "target language"
+    return _SUPPORTED_LANGUAGE_NAMES.get(code.lower(), code.upper())
+
 
 def _format_context_for_log(context: str | None) -> str:
     if not context:
@@ -89,26 +115,40 @@ class OpenAITranslator(BaseTranslator):
 
     def _build_system_content(
         self,
+        source_lang: str = "auto",
+        target_lang: str | None = None,
         context: str | None = None,
         protected_replacements: dict[str, str] | None = None,
     ) -> str:
+        if target_lang is None and context is None and source_lang and source_lang not in {"auto", "es", "en", "fr", "de", "it", "pt", "ca", "gl", "eu", "zh", "ja", "ko", "ar", "ru", "pl", "nl", "sv"}:
+            context = source_lang
+            source_lang = "auto"
+            target_lang = "auto"
+        if target_lang is None:
+            target_lang = "auto"
+
         protected_replacements = protected_replacements or getattr(self, "_protected_replacements", {})
         replacement_text = ""
         if protected_replacements:
-            protected_entries = [
-                f"{token} -> {value}"
-                for token, value in sorted(
-                    protected_replacements.items(),
-                    key=lambda item: len(item[0]),
-                    reverse=True,
-                )
-            ]
+            seen_values: set[str] = set()
+            protected_entries: list[str] = []
+            for token, value in sorted(
+                protected_replacements.items(),
+                key=lambda item: (len(item[0]), item[1]),
+                reverse=True,
+            ):
+                if value in seen_values:
+                    continue
+                seen_values.add(value)
+                protected_entries.append(f"{token} -> {value}")
             replacement_text = (
                 "Protected identifiers that must remain exactly unchanged and must be restored verbatim are: "
                 + "; ".join(protected_entries)
                 + ". "
             )
 
+        source_name = _language_name(source_lang)
+        target_name = _language_name(target_lang)
         protected_guidance = (
             "Protected placeholders are not ordinary words: they are internal markers that must remain exactly unchanged, including their casing, spacing, and punctuation. "
             "Do not translate, split, expand, paraphrase, or alter any placeholder token such as zqkpptx...vxq, and do not insert any extra spaces around them. "
@@ -116,8 +156,12 @@ class OpenAITranslator(BaseTranslator):
         )
         base = (
             "You are a specialist technical translator for PowerPoint slides and presentation materials. "
-            "Translate accurately and idiomatically for the target language, while preserving meaning, technical conventions, and the exact structure of fixed labels and protected terms. "
-            "Return only plain translated text. "
+            f"Translate from {source_name} to {target_name}. "
+            "Translate every segment completely unless it is explicitly protected by the exception list. "
+            "Do not leave ordinary words untranslated in the source language. Preserve punctuation, casing, numbers, spacing, and the meaning of technical terms. "
+            "Only keep a token unchanged when it is one of the protected identifiers listed below or a proper noun/acronym that must remain exactly as provided. "
+            "Return the result as a fenced JSON code block with a single key 'translations'. "
+            "Each entry must have exactly two fields: 'id' and 'text'. The list order must match the input order. "
             + replacement_text
             + protected_guidance
         )
@@ -141,6 +185,17 @@ class OpenAITranslator(BaseTranslator):
             restored = re.sub(re.escape(token), lambda _m, v=value: v, restored, flags=re.IGNORECASE)
         return restored
 
+    @staticmethod
+    def _strip_json_code_fence(raw: str) -> str:
+        text = raw.strip()
+        if not text.startswith("```"):
+            return text
+
+        match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        return text.removeprefix("```").removesuffix("```").strip()
+
     def _request_translation(self, user_content: str, source_lang: str, target_lang: str, context: str | None = None) -> str:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -152,6 +207,8 @@ class OpenAITranslator(BaseTranslator):
                 {
                     "role": "system",
                     "content": self._build_system_content(
+                        source_lang,
+                        target_lang,
                         context,
                         getattr(self, "_protected_replacements", {}),
                     ),
@@ -167,7 +224,7 @@ class OpenAITranslator(BaseTranslator):
             source_lang,
             target_lang,
         )
-        logger.debug("OpenAI request payload: %s", json.dumps(payload, ensure_ascii=False, indent=2))
+        logger.debug("OpenAI request payload:\n%s", json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
 
         response = requests.post(
             f"{self.api_base_url}/chat/completions",
@@ -195,7 +252,9 @@ class OpenAITranslator(BaseTranslator):
         context: str | None = None,
     ) -> str:
         user_content = (
-            f"Translate the following text from {source_lang} to {target_lang}. "
+            f"Translate the following text from {_language_name(source_lang)} to {_language_name(target_lang)}. "
+            "Translate the entire text fully and naturally. Do not leave ordinary words in the source language untranslated. "
+            "Preserve punctuation, casing, numbers, and spacing. Keep acronyms, names, and protected identifiers unchanged only when they are explicitly required. "
             "Return only the translated text and nothing else.\n\n"
             f"{text}"
         )
@@ -218,16 +277,19 @@ class OpenAITranslator(BaseTranslator):
         if not unique_texts:
             return {}
 
+        entries_payload = [{"id": text, "text": text} for text in unique_texts]
         user_content = (
-            "Translate each item in the JSON array below from "
-            f"{source_lang} to {target_lang}. Return a JSON object with a "
-            "single key 'translations' whose value is a list of objects like "
-            '{"id": "source text", "text": "translated text"}. Keep the same order as the input array. Do not include any extra text outside the JSON.\n\n'
-            + json.dumps({
-                "items": [{"id": text, "text": text} for text in unique_texts]
-            })
+            f"Source language: {_language_name(source_lang)}\n"
+            f"Target language: {_language_name(target_lang)}\n\n"
+            "Translate every item below. Do not leave ordinary words untranslated. "
+            "Only preserve values unchanged if they are explicitly protected exceptions or proper nouns/acronyms that must stay as-is. "
+            "Return a fenced JSON code block with a single key 'translations'. "
+            "The number of items must match the input exactly and the order must be preserved.\n\n"
+            + json.dumps({"items": entries_payload}, ensure_ascii=False)
         )
-        translated_text = self._request_translation(user_content, source_lang, target_lang, context=context)
+        translated_text = self._strip_json_code_fence(
+            self._request_translation(user_content, source_lang, target_lang, context=context)
+        )
         try:
             response_json = json.loads(translated_text)
             entries = response_json.get("translations", [])

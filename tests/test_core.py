@@ -99,6 +99,22 @@ class ExceptionRulesTests(unittest.TestCase):
         for token in replacements:
             self.assertRegex(token, r"^[a-z]+$")
 
+    def test_placeholder_tokens_are_unique_across_different_texts(self):
+        rules = self._rules_from_text("~Práctica {num} = Practical Lesson {num}\n!SGA = SGA\n")
+
+        masked_a, replacements_a = mask_exception_rules("Práctica 1", rules, start_index=0)
+        masked_b, replacements_b = mask_exception_rules("SGA y práctica 2", rules, start_index=len(replacements_a))
+
+        self.assertNotEqual(set(replacements_a), set(replacements_b))
+        self.assertEqual(
+            restore_exception_rules(masked_a, replacements_a),
+            "Practical Lesson 1",
+        )
+        self.assertEqual(
+            restore_exception_rules(masked_b, replacements_b),
+            "SGA y Practical Lesson 2",
+        )
+
     def test_restore_is_case_insensitive_for_mangled_casing(self):
         # Simulates a translator capitalizing the placeholder token (e.g.
         # because it starts a sentence), which must still be restored.
@@ -291,12 +307,19 @@ class ParagraphRunFormattingTests(unittest.TestCase):
         from pptx_translator.translators.openai import OpenAITranslator
 
         translator = OpenAITranslator(api_key="demo", api_base_url="https://example.test/v1")
-        translator._protected_replacements = {"zqkpptxaxvxq": "SGA", "zqkpptxbyvxq": "Practical Lesson 1"}
+        translator._protected_replacements = {
+            "zqkpptxaxvxq": "SGA",
+            "zqkpptxbyvxq": "SGA",
+            "zqkpptxcvvxq": "Practical Lesson 1",
+            "zqkpptxdxvxq": "Practical Lesson 1",
+        }
 
         content = translator._build_system_content("Demo context")
 
         self.assertIn("zqkpptxaxvxq -> SGA", content)
-        self.assertIn("zqkpptxbyvxq -> Practical Lesson 1", content)
+        self.assertIn("zqkpptxcvvxq -> Practical Lesson 1", content)
+        self.assertEqual(content.count(" -> SGA"), 1)
+        self.assertEqual(content.count(" -> Practical Lesson 1"), 1)
 
     def test_openai_slide_translation_uses_json_payload_for_batch_requests(self):
         from pptx_translator.translators.openai import OpenAITranslator

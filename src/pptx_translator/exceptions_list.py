@@ -241,7 +241,9 @@ def apply_exception_rules(text: str, rules: Sequence[ExceptionRule]) -> str:
 
 
 def mask_exception_rules(
-    text: str, rules: Sequence[ExceptionRule]
+    text: str,
+    rules: Sequence[ExceptionRule],
+    start_index: int = 0,
 ) -> tuple[str, dict[str, str]]:
     """Replaces every matching exception with a protected placeholder token.
 
@@ -250,11 +252,16 @@ def mask_exception_rules(
     translation is complete. Only ``!``/``~`` ("strict") rules should be
     passed here; ``<`` rules must go through :func:`apply_exception_rules`
     instead.
+
+    ``start_index`` allows callers to reserve a globally unique namespace of
+    placeholder ids so that distinct text fragments never reuse the same
+    placeholder token (which would otherwise cause exception values to be
+    mixed together across different translated texts).
     """
 
     protected = text
     replacements: dict[str, str] = {}
-    token_index = 0
+    token_index = start_index
 
     for rule in rules:
         def _replace(match: re.Match[str], template: str = rule.replacement_template) -> str:

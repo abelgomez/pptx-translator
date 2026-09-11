@@ -468,6 +468,7 @@ class PresentationTranslator:
         #      so the translator cannot alter them, then restored verbatim
         #      once translation is complete.
         #    Texts are grouped per slide so the translation unit is the slide.
+        next_placeholder_index = 0
         for job in jobs:
             if self._pre_translation_rules:
                 job.original_text = apply_exception_rules(
@@ -475,8 +476,11 @@ class PresentationTranslator:
                 )
             if self._protected_rules:
                 job.original_text, job.exception_replacements = mask_exception_rules(
-                    job.original_text, self._protected_rules
+                    job.original_text,
+                    self._protected_rules,
+                    start_index=next_placeholder_index,
                 )
+                next_placeholder_index += len(job.exception_replacements)
 
         unique_texts = {job.original_text for job in jobs}
         stats.unique_texts = len(unique_texts)
