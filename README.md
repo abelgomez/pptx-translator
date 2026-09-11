@@ -4,20 +4,36 @@ A Python command-line tool that translates PowerPoint (`.pptx`) presentations
 **while preserving the original formatting** (fonts, sizes, colors,
 alignment, bullet lists, tables, grouped shapes, speaker notes, etc.).
 
+PowerPoint files are notoriously fragmented: text is often split into many
+small fragments with different formatting, and layout can shift when text is
+rewritten or reflowed. For that reason, a faithful translation is a
+compromise: preserving the original appearance usually means translating
+smaller units and keeping the document structure as close as possible, while
+more aggressive formatting preservation can reduce translation quality and
+make the process slower. This tool is designed to keep the original visual
+layout and formatting as much as possible, while still producing a usable
+first-pass translation that can be reviewed and manually adjusted afterward.
+In practice, the result is best seen as a strong starting point for a human
+editor rather than a perfect final-rendered translation: some formatting may
+not be identical, a few text fragments may need polishing, and layout may vary
+slightly when PowerPoint reflows content. Even so, it is often a very
+helpful way to speed up the first translation pass on technical or academic
+presentations.
+
 ## Key features
 
 - **Automatic source-language detection.** You only need to specify the
   target language; the source language is detected from the presentation's
   own text.
 - **Format-preserving translation.** Text is rewritten in place, reusing the
-  original run/paragraph formatting (font, size, color, bold/italic,
+  original paragraph formatting (font, size, color, bold/italic,
   bullets, alignment).
-- **Optional flattening of inline formatting.** If you prefer better context for
+- **Optional flattening of inline emphasis.** If you prefer better context for
   translation over preserving word-by-word bold/italic/underline styling,
-  you can enable `--flatten-inline-formatting` to merge all text runs inside
-  a paragraph into a single translation unit even when the inline style
-  changes. The result is a more natural translation, but the original
-  per-run emphasis is intentionally discarded for that paragraph.
+  you can enable `--flatten-inline-formatting` to merge the separate text
+  fragments inside a paragraph into a single translation unit even when the
+  emphasis changes. The result is a more natural translation, but the
+  original emphasis is intentionally discarded for that paragraph.
 - **User-configurable translation exceptions.** Instead of hard-coding
   domain-specific rules in the program, you can supply a plain-text file
   with "do not translate literally" rules, with three selectable modes
@@ -49,7 +65,7 @@ alignment, bullet lists, tables, grouped shapes, speaker notes, etc.).
   group).
 - **Speaker notes are translated too.** The notes attached to each slide
   are translated paragraph by paragraph, the same way as regular slide
-  content, keeping each run's own formatting (bold, italics, etc.).
+  content, preserving the original emphasis inside each text fragment.
 - **Optional audio removal.** If requested, any embedded audio object found
   on a slide is removed from the output presentation, together with its
   relationship entries and any leftover reference to it in the slide's
@@ -110,9 +126,11 @@ pptx-translator/
 
 ## Installation
 
-All commands below use Windows PowerShell syntax; adapt them for
-Linux/macOS if needed (the equivalent virtual-environment activation script
-on Linux/macOS is `source .venv/bin/activate`).
+The following examples are platform-specific where needed.
+
+### Install and setup
+
+#### Windows (PowerShell)
 
 ```powershell
 # 1. Move into the project folder
@@ -120,14 +138,30 @@ cd pptx-translator
 
 # 2. Create and activate a virtual environment (venv)
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1        # Windows PowerShell
-# source .venv/bin/activate         # Linux/macOS
+.\.venv\Scripts\Activate.ps1
 
 # 3. Install dependencies
 pip install -r requirements.txt
 
 # 4. (Optional) copy the example configuration file and edit it
-copy .env.example .env
+Copy-Item .env.example .env
+```
+
+#### Linux / POSIX / macOS
+
+```bash
+# 1. Move into the project folder
+cd pptx-translator
+
+# 2. Create and activate a virtual environment (venv)
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 3. Install dependencies
+pip install -r requirements.txt
+
+# 4. (Optional) copy the example configuration file and edit it
+cp .env.example .env
 ```
 
 > **Note:** the `local` provider depends on `argostranslate`, which in turn
@@ -140,7 +174,7 @@ copy .env.example .env
 Basic usage (translates `presentation.pptx` from its auto-detected source
 language into English, using the default `local` provider):
 
-```powershell
+```bash
 python translate_pptx.py presentation.pptx -t en
 ```
 
@@ -160,23 +194,23 @@ translates each one in turn. By default it only processes files directly
 inside that directory; use `-r`/`--recursive` to include nested folders as
 well.
 
-### Flattening inline formatting for more accurate translation
+### Flattening inline emphasis for more natural translation
 
-By default, runs are kept split when their inline style changes (normal,
-bold, italic, underline), so the translation preserves that emphasis. If you
-want a more natural translation at the cost of losing the original emphasis,
-use:
+By default, PowerPoint fragments that use different emphasis are kept
+separate when their styling changes (normal, bold, italic, underline), so
+that emphasis is preserved in the output. If you want a more natural
+translation and are willing to give up that per-fragment emphasis, use:
 
-```powershell
+```bash
 python translate_pptx.py presentation.pptx -t en --flatten-inline-formatting
 ```
 
-This option merges all non-empty runs from the same paragraph into a single
+This option merges the separate text fragments inside a paragraph into a single
 translation unit, even when the paragraph mixes bold, italic, underline, and
 plain text. The original style differences are intentionally discarded for
-that paragraph; only the first run's style is kept when the translated text is
-written back. This can improve quality when PowerPoint has split a sentence
-across multiple styled fragments.
+that paragraph; only the first fragment's style is kept when the translated
+text is written back. This can improve quality when PowerPoint has split a
+sentence across multiple styled fragments.
 
 This behavior can also be enabled through the environment variable:
 
@@ -195,10 +229,10 @@ The application supports two providers:
   > **DISCLAIMER:** the OpenAI-compatible backend is experimental and should be used with caution. **It is typically much slower and more expensive than the local Argos backend**, especially when a presentation contains many slides or very large slide payloads. Even with slide-level batching, the larger the presentation and the more content per slide, the higher the **latency and API cost** remain.
 
 
-You can either configure the provider via `.env` or override it per run:
+You can either configure the provider via `.env` or override it for a specific translation request:
 
-```powershell
-python translate_pptx.py presentation.pptx -t en --provider openai --api-key "$env:OPENAI_API_KEY" --api-base-url "https://api.openai.com/v1" --model "gpt-4o-mini"
+```bash
+python translate_pptx.py presentation.pptx -t en --provider openai --api-key "$OPENAI_API_KEY" --api-base-url "https://api.openai.com/v1" --model "gpt-4o-mini"
 ```
 
 ### Command-line arguments
@@ -224,25 +258,25 @@ The OpenAI-compatible provider also honors the following environment variables f
 
 Translate to French, letting the source language be auto-detected:
 
-```powershell
+```bash
 python translate_pptx.py practica1.pptx -t fr
 ```
 
 Translate every `.pptx` file directly inside a folder:
 
-```powershell
+```bash
 python translate_pptx.py "presentaciones/" -t en
 ```
 
 Translate all `.pptx` files recursively under a folder tree:
 
-```powershell
+```bash
 python translate_pptx.py "presentaciones/" -t en -r
 ```
 
 Preview what would happen without writing any output files:
 
-```powershell
+```bash
 python translate_pptx.py "presentaciones/" -t en --dry-run
 ```
 
@@ -253,14 +287,14 @@ any `.pptx` files on disk.
 
 Translate with the local engine and apply a custom exceptions file:
 
-```powershell
+```bash
 python translate_pptx.py practica1.pptx -t en -e "exceptions.example.txt"
 ```
 
 Translate via an OpenAI-compatible API:
 
-```powershell
-python translate_pptx.py practica1.pptx -t en --provider openai --api-key "$env:OPENAI_API_KEY" --api-base-url "https://api.openai.com/v1" --model "gpt-4o-mini"
+```bash
+python translate_pptx.py practica1.pptx -t en --provider openai --api-key "$OPENAI_API_KEY" --api-base-url "https://api.openai.com/v1" --model "gpt-4o-mini"
 ```
 
 ## Logging
@@ -274,6 +308,8 @@ The log level can be configured in two ways:
   `TRANSLATOR_LOG_LEVEL` when given. `-v` forces `INFO`, `-vv` forces
   `DEBUG`.
 
+Windows (PowerShell):
+
 ```powershell
 # Only errors, no warnings
 $env:TRANSLATOR_LOG_LEVEL = "ERROR"
@@ -281,6 +317,21 @@ python translate_pptx.py practica1.pptx -t en
 
 # Verbose progress information (equivalent to -v)
 $env:TRANSLATOR_LOG_LEVEL = "INFO"
+python translate_pptx.py practica1.pptx -t en
+
+# -v/-vv always win over the environment variable
+python translate_pptx.py practica1.pptx -t en -vv
+```
+
+Linux/macOS (POSIX shell):
+
+```bash
+# Only errors, no warnings
+export TRANSLATOR_LOG_LEVEL="ERROR"
+python translate_pptx.py practica1.pptx -t en
+
+# Verbose progress information (equivalent to -v)
+export TRANSLATOR_LOG_LEVEL="INFO"
 python translate_pptx.py practica1.pptx -t en
 
 # -v/-vv always win over the environment variable
@@ -333,7 +384,7 @@ they are supplied via a plain-text file passed with `-e`/`--exceptions`.
 
 **Numeric wildcard:** `{num}` matches one or more digits.
 
-- On the left-hand side (source expression), `{num}` matches any run of
+- On the left-hand side (source expression), `{num}` matches any sequence of
   digits in the original text.
 - On the right-hand side (destination expression), each `{num}` is
   replaced, in order, by the digits captured by the corresponding `{num}`
@@ -381,7 +432,7 @@ TRANSLATOR_REMOVE_AUDIO=false
    units:
    - **Regular content** (not part of a figure): each paragraph is
      collected and translated independently, preserving bullet/paragraph
-     structure and each run's own formatting.
+     structure and the original formatting of each text fragment.
    - **Figure content**: all paragraphs' text is joined into a single
      string (manual line breaks become simple spaces) and translated as
      one unit.
@@ -397,7 +448,7 @@ TRANSLATOR_REMOVE_AUDIO=false
    (with caching and retries), to minimize the number of translation calls.
 7. Write the translations back:
    - Regular paragraphs (including speaker notes) are rewritten in place,
-     keeping their original run formatting and paragraph properties
+     keeping the original text-fragment formatting and paragraph properties
      (bullets, alignment, indentation).
    - Figure text boxes are collapsed into a single paragraph holding the
      translated (joined) text. Their text frame is switched to automatic
@@ -433,10 +484,10 @@ tool logs only warnings and errors (`WARN` level, configurable via
   Translate through English as an intermediate language (translate to
   English first, then translate the English output to your final target
   language) for that pair.
-- **First run of the `local` provider is slow**: this is expected, since
-  the language model (and, on first use overall, PyTorch/CTranslate2) is
-  being downloaded and cached. Subsequent runs with the same language pair
-  are fast, since no network calls are made at all.
+- **The first translation with the `local` provider is slow**: this is expected,
+  since the language model (and, on first use overall, PyTorch/CTranslate2) is
+  being downloaded and cached. Subsequent translations for the same language
+  pair are fast, since no network calls are made at all.
 - **"Invalid exception rule at ..."**: the exceptions file has a line that
   is neither blank, a comment (`#...`), nor of the form
   `[<|!|~]source = destination`. Fix or remove that line.
