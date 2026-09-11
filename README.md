@@ -56,14 +56,17 @@ alignment, bullet lists, tables, grouped shapes, speaker notes, etc.).
 - **Provider flexibility.** The project supports multiple local and remote
   backends: the default `local` provider uses
   [Argos Translate](https://www.argosopentech.com/), while `openai` lets
-  you route translations through any OpenAI-compatible endpoint. Models
-  based on OpenAI-compatible APIs can offer higher-quality translations,
-  but they typically run more slowly and may trigger a much larger number
-  of API calls for a single PowerPoint because the presentation text is
-  usually split into many small fragments.
+  you route translations through any OpenAI-compatible endpoint. The
+  OpenAI-compatible backend is intentionally optimized for efficiency:
+  each slide is translated as a single payload, rather than issuing one
+  remote request per unique text fragment. This keeps the API usage far
+  closer to a realistic “one call per slide” model, even in dense
+  presentations.
 - **Rate-limit friendly.** Translation requests are deduplicated and cached
   in-memory so repeated text is only translated once; remote providers also
-  honor a configurable request delay and exponential backoff.
+  honor a configurable request delay, retry policy, and timeout. The
+  OpenAI-compatible backend also batches per slide to reduce latency and
+  API consumption.
 
 ## Project structure
 
@@ -157,9 +160,9 @@ The application supports two providers:
 
 - `local` (default): the offline Argos Translate engine.
 - `openai`: any OpenAI-compatible API endpoint.
-  > AI-based translations can offer greater consistency and overall quality, and they often respect the original formatting and code/symbol-heavy syntax better than a purely local backend. However, this advantage comes at a cost: the OpenAI-compatible provider makes far heavier use of computational and network resources, and for a PowerPoint with many fragmented text elements **the request volume can become very high**.
+  > AI-based translations can offer greater consistency and overall quality, and they often respect the original formatting and code/symbol-heavy syntax better than a purely local backend. The remote provider is optimized to reduce waste by batching each slide into a single request, but it still consumes more CPU/network resources than the default local backend.
   >
-  > **DISCLAIMER:** the OpenAI-compatible backend is experimental and should be used with caution. Unlike the local Argos backend, it is usually noticeably slower because PowerPoint text is typically fragmented into hundreds of tiny units (titles, labels, bullet items, figure captions, notes, etc.), and each of those may require an individual translation request. In a dense presentation, the number of API calls can become very high, so latency and **cost can increase substantially**. This is a consequence of the format-preserving translation pipeline.
+  > **DISCLAIMER:** the OpenAI-compatible backend is experimental and should be used with caution. **It is typically much slower and more expensive than the local Argos backend**, especially when a presentation contains many slides or very large slide payloads. Even with slide-level batching, the larger the presentation and the more content per slide, the higher the **latency and API cost** remain.
 
 
 You can either configure the provider via `.env` or override it per run:
@@ -184,6 +187,8 @@ python translate_pptx.py presentation.pptx -t en --provider openai --api-key "$e
 | `--request-delay` | No | Seconds to wait between requests on remote providers. Defaults to `TRANSLATOR_REQUEST_DELAY`. |
 | `--remove-audio` | No | Removes embedded audio objects from the presentation before saving the output. Disabled by default; can also be enabled via `TRANSLATOR_REMOVE_AUDIO=true`. |
 | `-v`, `--verbose` | No | Increases logging, overriding `TRANSLATOR_LOG_LEVEL`: `-v` = `INFO`, `-vv` = `DEBUG`. Without flags, uses `TRANSLATOR_LOG_LEVEL` (see [Logging](#logging)), or `WARNING` if unset. |
+
+The OpenAI-compatible provider also honors the following environment variables from `.env`/the process environment: `TRANSLATOR_TIMEOUT`, `TRANSLATOR_MAX_RETRIES`, and `TRANSLATOR_RETRY_BACKOFF`. These values control the HTTP timeout and the retry policy used when calling the remote API.
 
 ### Examples
 
