@@ -333,6 +333,37 @@ class OpenAITranslator(BaseTranslator):
             raise TranslationError("OpenAI returned an empty translation for a single text")
         return self._restore_protected_replacements(cleaned)
 
+    def _parse_slide_translation_response(self, translated_text: str, id_to_text: dict[str, str]) -> dict[str, str]:
+        """Parses a slide-level JSON response into per-text translations."""
+
+        response_json = json.loads(translated_text)
+        entries = response_json.get("translations", [])
+        if not isinstance(entries, list):
+            raise ValueError("No 'translations' array in response")
+
+        translated_by_id: dict[str, str] = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            item_id = str(entry.get("id", ""))
+            item_text = entry.get("text")
+            if item_id and isinstance(item_text, str):
+                translated_by_id[item_id] = self._restore_protected_replacements(item_text)
+
+        results: dict[str, str] = {}
+        for item_id, original_text in id_to_text.items():
+            translated = translated_by_id.get(item_id, original_text)
+            results[original_text] = translated
+
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            item_id = str(entry.get("id", ""))
+            item_text = entry.get("text")
+            if item_id and isinstance(item_text, str) and item_id not in id_to_text:
+                results[item_id] = self._restore_protected_replacements(item_text)
+        return results
+
     def _translate_slide(
         self,
         texts: list[str],
@@ -361,59 +392,45 @@ class OpenAITranslator(BaseTranslator):
             "The number of items must match the input exactly and the order must be preserved.\n\n"
             + json.dumps({"items": entries_payload}, ensure_ascii=False)
         )
-        translated_text = self._strip_json_code_fence(
-            self._request_translation(
-                user_content,
-                source_lang,
-                target_lang,
-                context=context,
-                exception_rules=rules,
+
+        def _request_full_slide_translation() -> str:
+            return self._strip_json_code_fence(
+                self._request_translation(
+                    user_content,
+                    source_lang,
+                    target_lang,
+                    context=context,
+                    exception_rules=rules,
+                )
             )
-        )
+
         try:
-            response_json = json.loads(translated_text)
-            entries = response_json.get("translations", [])
-            if not isinstance(entries, list):
-                raise ValueError("No 'translations' array in response")
+            translated_text = _request_full_slide_translation()
+            return self._parse_slide_translation_response(translated_text, id_to_text)
         except (TypeError, ValueError, json.JSONDecodeError):
             logger.warning(
-                "OpenAI slide response was not valid JSON; retrying with per-item requests."
+                "OpenAI slide response was not valid JSON; retrying with a second full-slide request before per-item fallback."
             )
-            results: dict[str, str] = {}
-            for text in unique_texts:
-                try:
-                    results[text] = self._translate_single_text(
-                        text,
-                        source_lang,
-                        target_lang,
-                        context=context,
-                        exception_rules=rules,
-                    )
-                except TranslationError as exc:
-                    raise TranslationError(
-                        f"OpenAI per-item translation failed for '{text[:60]}...': {exc}"
-                    ) from exc
-            return results
-
-        translated_by_id: dict[str, str] = {}
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            item_id = str(entry.get("id", ""))
-            item_text = entry.get("text")
-            if item_id and isinstance(item_text, str):
-                translated_by_id[item_id] = self._restore_protected_replacements(item_text)
+            try:
+                translated_text = _request_full_slide_translation()
+                return self._parse_slide_translation_response(translated_text, id_to_text)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                logger.warning(
+                    "OpenAI slide response was still invalid after a second full-slide retry; retrying with per-item requests."
+                )
 
         results: dict[str, str] = {}
-        for item_id, original_text in id_to_text.items():
-            translated = translated_by_id.get(item_id, original_text)
-            results[original_text] = translated
-
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            item_id = str(entry.get("id", ""))
-            item_text = entry.get("text")
-            if item_id and isinstance(item_text, str) and item_id not in id_to_text:
-                results[item_id] = self._restore_protected_replacements(item_text)
+        for text in unique_texts:
+            try:
+                results[text] = self._translate_single_text(
+                    text,
+                    source_lang,
+                    target_lang,
+                    context=context,
+                    exception_rules=rules,
+                )
+            except TranslationError as exc:
+                raise TranslationError(
+                    f"OpenAI per-item translation failed for '{text[:60]}...': {exc}"
+                ) from exc
         return results

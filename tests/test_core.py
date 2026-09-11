@@ -148,6 +148,30 @@ class CLIInterruptAndLogTests(unittest.TestCase):
         self.assertEqual(fake_translator.translate.call_count, 5)
         self.assertEqual(sleep_mock.call_args_list, [call(2), call(4), call(8), call(16)])
 
+    def test_openai_retries_full_slide_batch_before_per_item_fallback(self):
+        from pptx_translator.translators.openai import OpenAITranslator
+
+        translator = OpenAITranslator(api_key="demo", api_base_url="https://example.test/v1")
+        request_mock = patch.object(
+            translator,
+            "_request_translation",
+            side_effect=[
+                "```json\n{bad\n```",
+                "```json\n{\"translations\":[{\"id\":\"0\",\"text\":\"TR:Concepto\"},{\"id\":\"1\",\"text\":\"TR:importante\"}]}\n```",
+            ],
+        )
+
+        with request_mock as request_call, patch.object(
+            translator,
+            "_translate_single_text",
+            side_effect=AssertionError("per-item fallback should not be used"),
+        ) as single_call:
+            results = translator._translate_slide(["Concepto", " importante"], "es", "en")
+
+        self.assertEqual(results, {"Concepto": "TR:Concepto", " importante": "TR:importante"})
+        self.assertEqual(request_call.call_count, 2)
+        single_call.assert_not_called()
+
 
 class PresentationFormattingTests(unittest.TestCase):
     def test_adjacent_runs_with_same_format_are_merged_before_translation(self):
