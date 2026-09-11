@@ -1,0 +1,35 @@
+# Example translation exceptions file for pptx-translator.
+#
+# Each non-empty, non-comment line has the form:
+#   [<|!|~]source expression = destination expression
+#
+# Optional one-character prefix:
+#   <  pre-translation substitution (applied before translating; the
+#      destination text is expected to already be in the target language)
+#   !  strict, case-sensitive protection (guarantees the destination text
+#      appears verbatim in the output, regardless of what the translator
+#      would have produced)
+#   ~  strict, case-insensitive protection (same guarantee as '!', but
+#      matches the source expression ignoring case)
+#   (no prefix) same as '~' (kept for backward compatibility)
+#
+# A rule can also be used to force a literal target phrase for a term that
+# should not be translated by the model, while keeping the source expression
+# flexible or case-insensitive when needed.
+#
+# Examples:
+#   <Práctica {num} = Practical Lesson {num}      # substitute before translating
+#   !SGA = SGA                                    # protect strictly, case-sensitive
+#   ~sga = SGA                                    # protect strictly, case-insensitive
+#   SGBD = RDBMS                                  # same as '~' for backward compatibility
+#
+# The placeholder {num} matches one or more digits on the source side and
+# is replaced with the captured digits on the destination side.
+#
+# Pass this file to the program with: -e exceptions.example.txt
+
+~Practica {num} = Practical Lesson {num}
+~Práctica {num} = Practical Lesson {num}
+!SGA = SGA
+~sga = SGA
+<SGBD = RDBMS
