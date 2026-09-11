@@ -136,6 +136,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Preview the files that would be translated without writing any "
+            "output files or modifying the filesystem."
+        ),
+    )
+    parser.add_argument(
         "--remove-audio",
         action="store_true",
         help=(
@@ -300,7 +308,6 @@ def main(argv: list[str] | None = None) -> int:
             continue
 
         output_path = _default_output_path(file_path, args.target)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
 
         logger.info(
             "[%d/%d] Translation provider: %s | Input: %s | Output: %s | Target: %s",
@@ -311,6 +318,21 @@ def main(argv: list[str] | None = None) -> int:
             output_path,
             args.target,
         )
+
+        if args.dry_run:
+            if output_path.exists():
+                logger.warning(
+                    "Dry run: file '%s' already exists and would be overwritten.",
+                    output_path,
+                )
+            else:
+                logger.warning(
+                    "Dry run: translation would be written to '%s'.",
+                    output_path,
+                )
+            continue
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
         presentation_translator = PresentationTranslator(
             translator,
@@ -349,11 +371,18 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("Translated presentation saved to: %s", output_path)
 
     if len(files_to_process) > 1:
-        logger.info(
-            "Batch complete: %d file(s) processed, %d error(s).",
-            len(files_to_process),
-            total_failed,
-        )
+        if args.dry_run:
+            logger.info(
+                "Batch dry run complete: %d file(s) would be processed, %d error(s).",
+                len(files_to_process),
+                total_failed,
+            )
+        else:
+            logger.info(
+                "Batch complete: %d file(s) processed, %d error(s).",
+                len(files_to_process),
+                total_failed,
+            )
 
     return 1 if total_failed == len(files_to_process) else 0
 

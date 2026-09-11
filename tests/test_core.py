@@ -336,6 +336,27 @@ class CliBatchProcessingTests(unittest.TestCase):
                 "en",
             )
 
+    def test_dry_run_does_not_write_output_or_call_translator(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            source = root / "presentation.pptx"
+            target = root / "presentation_en.pptx"
+            source.write_bytes(b"pptx")
+            target.write_bytes(b"existing")
+
+            with patch("pptx_translator.cli.create_translator") as mock_factory, patch(
+                "pptx_translator.cli.PresentationTranslator"
+            ) as mock_translator_cls:
+                mock_factory.return_value.name = "stub"
+
+                result = __import__("pptx_translator.cli", fromlist=["main"]).main(
+                    [str(source), "-t", "en", "--dry-run"]
+                )
+
+            self.assertEqual(result, 0)
+            self.assertEqual(mock_translator_cls.call_count, 0)
+            self.assertEqual(target.read_bytes(), b"existing")
+
     def test_directory_without_recursive_only_processes_top_level_ppts(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

@@ -205,6 +205,17 @@ Translate all `.pptx` files recursively under a folder tree:
 python translate_pptx.py "presentaciones/" -t en -r
 ```
 
+Preview what would happen without writing any output files:
+
+```powershell
+python translate_pptx.py "presentaciones/" -t en --dry-run
+```
+
+In dry-run mode, the program still evaluates the same files and output names,
+logs the same provider and target-language decisions, and warns when a target
+file already exists and would be overwritten, but it does not create or modify
+any `.pptx` files on disk.
+
 Translate with the local engine and apply a custom exceptions file:
 
 ```powershell
