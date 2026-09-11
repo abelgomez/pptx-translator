@@ -178,14 +178,15 @@ class OpenAITranslator(BaseTranslator):
         exception_guidance = (
             "When the source text contains any of the exception terms listed above, keep that term exactly as the corresponding target value specifies. "
             "Do not translate, rearrange, or normalize it. Preserve acronyms, technical labels, and fixed names verbatim. "
+            "If a technical acronym or established proper noun is standard in the target language, keep that form; otherwise translate the surrounding sentence naturally. "
         )
         base = (
             "You are a specialist technical translator for PowerPoint slides and presentation materials. "
             f"Translate from {source_name} to {target_name}. "
-            "Translate every segment completely, while respecting the exception list exactly. "
+            "Your task is to produce a faithful, presentation-ready translation for academic and technical content. "
+            "Translate every segment completely and naturally, while respecting the exception list exactly. "
             "Do not leave ordinary words untranslated in the source language. Preserve punctuation, casing, numbers, spacing, and the meaning of technical terms. "
-            "Return the result as a fenced JSON code block with a single key 'translations'. "
-            "Each entry must have exactly two fields: 'id' and 'text'. The list order must match the input order. "
+            "Prefer the standard terminology used in the target-language academic and technical domain. "
             + replacement_text
             + exception_guidance
         )
@@ -195,7 +196,8 @@ class OpenAITranslator(BaseTranslator):
         safe_context = " ".join(context.replace("\r", " ").replace("\n", " ").split())
         return (
             f"Presentation context: {safe_context}. "
-            "Use this context to preserve the correct domain terminology, title conventions, author names, affiliations, and presentation-specific phrasing. "
+            "Use this context to preserve the correct domain terminology, title conventions, author names, affiliations, course names, labs, and presentation-specific phrasing. "
+            "When the task is ambiguous, prefer the terminology used in the presentation context over a literal word-by-word translation. "
             + base
         )
 
@@ -286,10 +288,12 @@ class OpenAITranslator(BaseTranslator):
     ) -> str:
         rules = exception_rules if exception_rules is not None else self.exception_rules
         user_content = (
-            f"Translate the following text from {_language_name(source_lang)} to {_language_name(target_lang)}. "
-            "Translate the entire text fully and naturally. Do not leave ordinary words in the source language untranslated. "
-            "Preserve punctuation, casing, numbers, and spacing. Keep acronyms, names, and protected identifiers unchanged only when they are explicitly required. "
-            "Return only the translated text and nothing else.\n\n"
+            f"Translate this presentation text from {_language_name(source_lang)} to {_language_name(target_lang)}. "
+            "Translate it fully and naturally, preserving the tone expected in academic and technical slides. "
+            "Do not leave ordinary words untranslated in the source language. Preserve punctuation, casing, numbers, spacing, and meaning. "
+            "Keep protected names, acronyms, fixed labels, and exception terms exactly as specified. "
+            "If a technical term has a standard target-language form, use that form. "
+            "Return only the translated text with no JSON, no markdown fences, and no commentary.\n\n"
             f"{text}"
         )
         translated_text = self._request_translation(
@@ -319,7 +323,10 @@ class OpenAITranslator(BaseTranslator):
         if not unique_texts:
             return {}
 
-        entries_payload = [{"id": text, "text": text} for text in unique_texts]
+        id_to_text = {str(index): text for index, text in enumerate(unique_texts)}
+        entries_payload = [
+            {"id": item_id, "text": text} for item_id, text in id_to_text.items()
+        ]
         user_content = (
             f"Source language: {_language_name(source_lang)}\n"
             f"Target language: {_language_name(target_lang)}\n\n"
@@ -363,12 +370,25 @@ class OpenAITranslator(BaseTranslator):
                     ) from exc
             return results
 
-        results: dict[str, str] = {}
+        translated_by_id: dict[str, str] = {}
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
             item_id = str(entry.get("id", ""))
             item_text = entry.get("text")
             if item_id and isinstance(item_text, str):
+                translated_by_id[item_id] = self._restore_protected_replacements(item_text)
+
+        results: dict[str, str] = {}
+        for item_id, original_text in id_to_text.items():
+            translated = translated_by_id.get(item_id, original_text)
+            results[original_text] = translated
+
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            item_id = str(entry.get("id", ""))
+            item_text = entry.get("text")
+            if item_id and isinstance(item_text, str) and item_id not in id_to_text:
                 results[item_id] = self._restore_protected_replacements(item_text)
         return results

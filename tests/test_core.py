@@ -351,6 +351,7 @@ class ParagraphRunFormattingTests(unittest.TestCase):
         payload = mock_post.call_args.kwargs["json"]
         self.assertIn("single key 'translations'", payload["messages"][1]["content"])
         self.assertIn('"items":', payload["messages"][1]["content"])
+        self.assertIn('"id": "0"', payload["messages"][1]["content"])
 
     def test_openai_slide_retries_with_single_text_calls_when_json_parse_fails(self):
         from pptx_translator.translators.openai import OpenAITranslator
@@ -366,7 +367,24 @@ class ParagraphRunFormattingTests(unittest.TestCase):
 
         self.assertEqual(result, {"Hola": "Hello"})
         self.assertEqual(mock_post.call_count, 2)
-        self.assertIn("Translate the following text", mock_post.call_args_list[1].kwargs["json"]["messages"][1]["content"])
+        self.assertIn("Translate this presentation text", mock_post.call_args_list[1].kwargs["json"]["messages"][1]["content"])
+
+    def test_openai_single_text_request_avoids_json_formatting(self):
+        from pptx_translator.translators.openai import OpenAITranslator
+
+        translator = OpenAITranslator(api_key="demo", api_base_url="https://example.test/v1")
+        with patch("pptx_translator.translators.openai.requests.post") as mock_post:
+            mock_post.return_value.status_code = 200
+            mock_post.return_value.json.return_value = {
+                "choices": [{"message": {"content": "Hello"}}]
+            }
+
+            translator._translate_single_text("Práctica 1", "es", "en")
+
+        user_content = mock_post.call_args.kwargs["json"]["messages"][1]["content"]
+        self.assertNotIn("single key 'translations'", user_content)
+        self.assertNotIn("```json", user_content.lower())
+        self.assertIn("Return only the translated text", user_content)
 
     def test_local_translator_keeps_original_text_when_individual_item_fails(self):
         class _LocalLikeTranslator(BaseTranslator):
