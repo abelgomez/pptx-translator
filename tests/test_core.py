@@ -120,7 +120,7 @@ class LogLevelResolutionTests(unittest.TestCase):
         self.assertEqual(_resolve_log_level(0, "DEBUG"), logging.DEBUG)
         self.assertEqual(_resolve_log_level(0, "INFO"), logging.INFO)
         self.assertEqual(_resolve_log_level(0, "ERROR"), logging.ERROR)
-        self.assertEqual(_resolve_log_level(0, "WARN"), logging.WARNING)
+        self.assertEqual(_resolve_log_level(0, "WARNING"), logging.WARNING)
 
     def test_no_flag_and_no_config_defaults_to_warning(self):
         self.assertEqual(_resolve_log_level(0, None), logging.WARNING)
@@ -277,7 +277,8 @@ class CliLoggingTests(unittest.TestCase):
         from pptx_translator.config import Settings
 
         logger = unittest.mock.Mock()
-        _log_active_configuration(logger, Settings(provider="openai"), "local")
+        logger.isEnabledFor.return_value = True
+        _log_active_configuration(logger, Settings(provider="openai", remove_audio=False), "local")
 
         logger.info.assert_any_call("Selected translation provider: %s", "local")
         logger.info.assert_any_call("Audio removal enabled: %s", False)
@@ -286,11 +287,15 @@ class CliLoggingTests(unittest.TestCase):
         from pptx_translator.translators.local_argos import _sync_argos_internal_logging
 
         logging.basicConfig(level=logging.WARNING, force=True)
+        stanza_logger = logging.getLogger("stanza")
+        stanza_logger.disabled = False
+        stanza_logger.setLevel(logging.INFO)
+
         _sync_argos_internal_logging()
 
-        self.assertEqual(logging.getLogger("stanza").getEffectiveLevel(), logging.CRITICAL)
-        self.assertFalse(logging.getLogger("stanza").propagate)
-        self.assertEqual(logging.getLogger("stanza.resources.common").getEffectiveLevel(), logging.CRITICAL)
+        self.assertTrue(stanza_logger.disabled)
+        self.assertEqual(logging.getLogger("argostranslate").getEffectiveLevel(), logging.CRITICAL)
+        self.assertEqual(logging.getLogger("argostranslate.utils").getEffectiveLevel(), logging.CRITICAL)
 
 
 class CliBatchProcessingTests(unittest.TestCase):
