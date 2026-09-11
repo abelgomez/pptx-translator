@@ -66,6 +66,7 @@ class Settings:
     max_retries: int = _get_int("TRANSLATOR_MAX_RETRIES", 4)
     retry_backoff_seconds: float = _get_float("TRANSLATOR_RETRY_BACKOFF", 2.0)
     request_timeout_seconds: float = _get_float("TRANSLATOR_TIMEOUT", 60.0)
+    flatten_inline_formatting: bool = _get_bool("TRANSLATOR_FLATTEN_INLINE_FORMATTING", False)
     api_key: str | None = (
         os.getenv("TRANSLATOR_API_KEY")
         or os.getenv("OPENAI_API_KEY")

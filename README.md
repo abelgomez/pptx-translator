@@ -12,6 +12,12 @@ alignment, bullet lists, tables, grouped shapes, speaker notes, etc.).
 - **Format-preserving translation.** Text is rewritten in place, reusing the
   original run/paragraph formatting (font, size, color, bold/italic,
   bullets, alignment).
+- **Optional flattening of inline formatting.** If you prefer better context for
+  translation over preserving word-by-word bold/italic/underline styling,
+  you can enable `--flatten-inline-formatting` to merge all text runs inside
+  a paragraph into a single translation unit even when the inline style
+  changes. The result is a more natural translation, but the original
+  per-run emphasis is intentionally discarded for that paragraph.
 - **User-configurable translation exceptions.** Instead of hard-coding
   domain-specific rules in the program, you can supply a plain-text file
   with "do not translate literally" rules, with three selectable modes
@@ -153,6 +159,30 @@ When the input is a directory, the program looks for `.pptx` files and
 translates each one in turn. By default it only processes files directly
 inside that directory; use `-r`/`--recursive` to include nested folders as
 well.
+
+### Flattening inline formatting for more accurate translation
+
+By default, runs are kept split when their inline style changes (normal,
+bold, italic, underline), so the translation preserves that emphasis. If you
+want a more natural translation at the cost of losing the original emphasis,
+use:
+
+```powershell
+python translate_pptx.py presentation.pptx -t en --flatten-inline-formatting
+```
+
+This option merges all non-empty runs from the same paragraph into a single
+translation unit, even when the paragraph mixes bold, italic, underline, and
+plain text. The original style differences are intentionally discarded for
+that paragraph; only the first run's style is kept when the translated text is
+written back. This can improve quality when PowerPoint has split a sentence
+across multiple styled fragments.
+
+This behavior can also be enabled through the environment variable:
+
+```env
+TRANSLATOR_FLATTEN_INLINE_FORMATTING=true
+```
 
 ### Provider selection
 

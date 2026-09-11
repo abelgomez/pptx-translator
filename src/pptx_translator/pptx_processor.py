@@ -279,6 +279,7 @@ class PresentationTranslator:
         exception_rules: list[ExceptionRule] | None = None,
         sample_chars_for_detection: int = 3000,
         remove_audio: bool = False,
+        flatten_inline_formatting: bool = False,
     ):
         self.translator = translator
         self.fallback_translator = fallback_translator
@@ -288,6 +289,7 @@ class PresentationTranslator:
             self.fallback_translator.exception_rules = self.exception_rules
         self.sample_chars_for_detection = sample_chars_for_detection
         self.remove_audio = remove_audio
+        self.flatten_inline_formatting = flatten_inline_formatting
 
     # -- Language detection ---------------------------------------------
     def _collect_detection_sample(self, prs) -> str:
@@ -440,6 +442,22 @@ class PresentationTranslator:
                     runs.append((run, plain, leading_ws, trailing_ws))
 
                 if not runs:
+                    continue
+
+                if self.flatten_inline_formatting:
+                    merged_plain = "".join(
+                        f"{leading_ws}{plain}{trailing_ws}"
+                        for _, plain, leading_ws, trailing_ws in runs
+                    )
+                    job = TranslationJob(
+                        "paragraph_run",
+                        paragraph,
+                        merged_plain,
+                        text_frame=text_frame,
+                        slide_index=slide_index,
+                    )
+                    job.run_segments = runs
+                    jobs.append(job)
                     continue
 
                 groups: list[list[tuple[object, str, str, str]]] = []

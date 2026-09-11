@@ -154,6 +154,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "-f",
+        "--flatten-inline-formatting",
+        action="store_true",
+        help=(
+            "Combine all text runs inside the same paragraph into a single "
+            "translation unit even when they use different inline styles "
+            "(normal, bold, italic, underline). This loses the original "
+            "run-level formatting, but it can improve translation quality "
+            "for fragmented text. Can also be enabled via "
+            "TRANSLATOR_FLATTEN_INLINE_FORMATTING=true."
+        ),
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="count",
@@ -210,6 +223,7 @@ def _log_active_configuration(logger: logging.Logger, settings, provider_name: s
 
     logger.info("Selected translation provider: %s", provider_name)
     logger.info("Audio removal enabled: %s", bool(settings.remove_audio))
+    logger.info("Inline formatting flattening enabled: %s", bool(settings.flatten_inline_formatting))
 
     if not logger.isEnabledFor(logging.DEBUG):
         return
@@ -348,6 +362,7 @@ def main(argv: list[str] | None = None) -> int:
                 translator,
                 exception_rules=exception_rules,
                 remove_audio=args.remove_audio or settings.remove_audio,
+                flatten_inline_formatting=args.flatten_inline_formatting or settings.flatten_inline_formatting,
             )
             try:
                 stats = presentation_translator.translate(

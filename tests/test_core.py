@@ -331,6 +331,48 @@ class ParagraphRunFormattingTests(unittest.TestCase):
             output_paragraph = output_prs.slides[0].shapes[0].text_frame.paragraphs[0]
             self.assertEqual(output_paragraph.text, "TR:Conocer la")
 
+    def test_flatten_inline_formatting_merges_runs_with_different_styles(self):
+        class _StubTranslator(BaseTranslator):
+            name = "stub"
+
+            def _translate_slide(
+                self,
+                texts,
+                source_lang,
+                target_lang,
+                context=None,
+                exception_rules=None,
+            ):
+                return {text: f"TR:{text}" for text in texts}
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_path = Path(tmp_dir) / "flatten_inline_formatting.pptx"
+            output_path = Path(tmp_dir) / "flatten_inline_formatting_en.pptx"
+
+            prs = Presentation()
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            textbox = slide.shapes.add_textbox(10, 10, 300, 100)
+            paragraph = textbox.text_frame.paragraphs[0]
+
+            first_run = paragraph.add_run()
+            first_run.text = "Concepto"
+            first_run.font.bold = True
+
+            second_run = paragraph.add_run()
+            second_run.text = " importante"
+            second_run.font.italic = True
+
+            prs.save(input_path)
+
+            PresentationTranslator(_StubTranslator(), flatten_inline_formatting=True).translate(
+                str(input_path), str(output_path), target_lang="en", source_lang="es"
+            )
+
+            output_prs = Presentation(output_path)
+            paragraph = output_prs.slides[0].shapes[0].text_frame.paragraphs[0]
+            self.assertEqual(len(paragraph.runs), 1)
+            self.assertEqual(paragraph.text, "TR:Concepto importante")
+
     def test_regular_text_boxes_enable_word_wrap_and_autosize(self):
         class _StubTranslator(BaseTranslator):
             name = "stub"
