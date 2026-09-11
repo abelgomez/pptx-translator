@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import threading
 from typing import Any
 
 import requests
@@ -260,12 +261,36 @@ class OpenAITranslator(BaseTranslator):
         )
         logger.debug("OpenAI request payload:\n%s", json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
 
-        response = requests.post(
-            f"{self.api_base_url}/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=self.request_timeout_seconds,
-        )
+        response_holder: dict[str, Any] = {}
+        error_holder: dict[str, BaseException] = {}
+        finished = threading.Event()
+
+        def _do_post() -> None:
+            try:
+                response = requests.post(
+                    f"{self.api_base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=self.request_timeout_seconds,
+                )
+                response_holder["response"] = response
+            except BaseException as exc:  # pragma: no cover - exercised via signal paths
+                error_holder["error"] = exc
+            finally:
+                finished.set()
+
+        worker = threading.Thread(target=_do_post, daemon=True)
+        worker.start()
+
+        while not finished.wait(0.1):
+            pass
+
+        if "error" in error_holder:
+            raise error_holder["error"]
+
+        response = response_holder.get("response")
+        if response is None:
+            raise TranslationError("OpenAI request did not complete")
         if response.status_code >= 400:
             raise TranslationError(
                 f"HTTP {response.status_code} from remote provider: {response.text}"
