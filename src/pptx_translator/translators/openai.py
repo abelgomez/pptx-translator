@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 import requests
@@ -11,6 +12,16 @@ import requests
 from .base import BaseTranslator, TranslationError
 
 logger = logging.getLogger(__name__)
+
+
+def _format_context_for_log(context: str | None) -> str:
+    if not context:
+        return ""
+
+    normalized = context.strip().replace("\r\n", "\n").replace("\r", "\n")
+    normalized = re.sub(r"\n+", "\n", normalized)
+    lines = [line.strip() for line in normalized.split("\n")]
+    return " / ".join(line for line in lines if line)
 
 
 class OpenAITranslator(BaseTranslator):
@@ -39,7 +50,7 @@ class OpenAITranslator(BaseTranslator):
     def on_presentation_start(self, context: str | None = None) -> None:
         logger.info(
             "Using first-slide presentation context for OpenAI-compatible translation: %s",
-            context,
+            _format_context_for_log(context),
         )
 
     def _extract_text(self, payload: dict[str, Any]) -> str:

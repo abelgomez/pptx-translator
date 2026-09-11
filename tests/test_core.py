@@ -250,7 +250,8 @@ class ParagraphRunFormattingTests(unittest.TestCase):
         from pptx_translator.translators.openai import OpenAITranslator
 
         translator = OpenAITranslator(api_key="demo", api_base_url="https://example.test/v1")
-        context = "Título del estudio"
+        context = "Título del estudio\n\nPrimera línea\nSegunda línea"
+        formatted_context = "Título del estudio / Primera línea / Segunda línea"
 
         with patch("pptx_translator.translators.openai.logger") as mock_logger:
             translator.on_presentation_start(context)
@@ -265,9 +266,12 @@ class ParagraphRunFormattingTests(unittest.TestCase):
         )
         self.assertTrue(
             any(
-                context in str(call)
+                formatted_context in str(call)
                 for call in mock_logger.info.call_args_list
             )
+        )
+        self.assertTrue(
+            all("\n" not in str(call) for call in mock_logger.info.call_args_list)
         )
 
 
