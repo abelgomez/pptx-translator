@@ -274,6 +274,17 @@ class ParagraphRunFormattingTests(unittest.TestCase):
             all("\n" not in str(call) for call in mock_logger.info.call_args_list)
         )
 
+    def test_openai_system_content_includes_protected_replacements(self):
+        from pptx_translator.translators.openai import OpenAITranslator
+
+        translator = OpenAITranslator(api_key="demo", api_base_url="https://example.test/v1")
+        translator._protected_replacements = {"zqkpptxaxvxq": "SGA", "zqkpptxbyvxq": "Practical Lesson 1"}
+
+        content = translator._build_system_content("Demo context")
+
+        self.assertIn("zqkpptxaxvxq -> SGA", content)
+        self.assertIn("zqkpptxbyvxq -> Practical Lesson 1", content)
+
 
 class CliLoggingTests(unittest.TestCase):
     def test_selected_provider_log_uses_effective_provider_only(self):

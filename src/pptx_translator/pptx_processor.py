@@ -465,14 +465,27 @@ class PresentationTranslator:
             target_lang,
         )
         context = self._collect_first_slide_context(prs)
-        self.translator.on_presentation_start(context)
-        translations, failed_texts = self.translator.translate_many(
-            unique_texts,
-            resolved_source_lang,
-            target_lang,
-            fallback=self.fallback_translator,
-            context=context,
-        )
+        protected_replacements = {
+            token: value
+            for job in jobs
+            for token, value in job.exception_replacements.items()
+        }
+        for provider in (self.translator, self.fallback_translator):
+            if provider is not None:
+                provider._protected_replacements = protected_replacements
+        try:
+            self.translator.on_presentation_start(context)
+            translations, failed_texts = self.translator.translate_many(
+                unique_texts,
+                resolved_source_lang,
+                target_lang,
+                fallback=self.fallback_translator,
+                context=context,
+            )
+        finally:
+            for provider in (self.translator, self.fallback_translator):
+                if provider is not None:
+                    provider._protected_replacements = {}
         stats.failed_texts = len(failed_texts)
 
         # 5. Write the translations back into the presentation.

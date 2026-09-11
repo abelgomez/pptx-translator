@@ -17,6 +17,7 @@ def create_translator(
     api_base_url: str | None = None,
     model: str | None = None,
     request_delay_seconds: float | None = None,
+    request_timeout_seconds: float | None = None,
 ) -> BaseTranslator:
     """Creates the configured translator."""
 
@@ -39,6 +40,11 @@ def create_translator(
             api_key=api_key or settings.api_key,
             api_base_url=api_base_url or settings.api_base_url,
             model=model or settings.model,
+            request_timeout_seconds=(
+                request_timeout_seconds
+                if request_timeout_seconds is not None
+                else settings.request_timeout_seconds
+            ),
             **kwargs,
         )
 
