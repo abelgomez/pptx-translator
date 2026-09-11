@@ -10,6 +10,7 @@ from typing import Any
 
 import requests
 
+from ..exceptions_list import ExceptionMode, ExceptionRule
 from .base import BaseTranslator, TranslationError
 
 logger = logging.getLogger(__name__)
@@ -113,12 +114,36 @@ class OpenAITranslator(BaseTranslator):
 
         return content.strip()
 
+    @staticmethod
+    def _describe_exception_rules(exception_rules: list[ExceptionRule] | None) -> str:
+        if not exception_rules:
+            return ""
+
+        entries: list[str] = []
+        seen: set[str] = set()
+        for rule in exception_rules:
+            desc = f"{rule.raw_source} -> {rule.raw_destination}"
+            if desc in seen:
+                continue
+            seen.add(desc)
+            entries.append(desc)
+
+        if not entries:
+            return ""
+
+        return (
+            "The following exception terms must be kept exactly as specified in the target language: "
+            + "; ".join(entries)
+            + ". "
+        )
+
     def _build_system_content(
         self,
         source_lang: str = "auto",
         target_lang: str | None = None,
         context: str | None = None,
         protected_replacements: dict[str, str] | None = None,
+        exception_rules: list[ExceptionRule] | None = None,
     ) -> str:
         if target_lang is None and context is None and source_lang and source_lang not in {"auto", "es", "en", "fr", "de", "it", "pt", "ca", "gl", "eu", "zh", "ja", "ko", "ar", "ru", "pl", "nl", "sv"}:
             context = source_lang
@@ -127,9 +152,10 @@ class OpenAITranslator(BaseTranslator):
         if target_lang is None:
             target_lang = "auto"
 
-        protected_replacements = protected_replacements or getattr(self, "_protected_replacements", {})
-        replacement_text = ""
-        if protected_replacements:
+        effective_rules = exception_rules if exception_rules is not None else self.exception_rules
+        protected_replacements = protected_replacements or self._protected_replacements
+        replacement_text = self._describe_exception_rules(effective_rules)
+        if not replacement_text and protected_replacements:
             seen_values: set[str] = set()
             protected_entries: list[str] = []
             for token, value in sorted(
@@ -149,21 +175,19 @@ class OpenAITranslator(BaseTranslator):
 
         source_name = _language_name(source_lang)
         target_name = _language_name(target_lang)
-        protected_guidance = (
-            "Protected placeholders are not ordinary words: they are internal markers that must remain exactly unchanged, including their casing, spacing, and punctuation. "
-            "Do not translate, split, expand, paraphrase, or alter any placeholder token such as zqkpptx...vxq, and do not insert any extra spaces around them. "
-            "Treat them as immutable fixed identifiers. "
+        exception_guidance = (
+            "When the source text contains any of the exception terms listed above, keep that term exactly as the corresponding target value specifies. "
+            "Do not translate, rearrange, or normalize it. Preserve acronyms, technical labels, and fixed names verbatim. "
         )
         base = (
             "You are a specialist technical translator for PowerPoint slides and presentation materials. "
             f"Translate from {source_name} to {target_name}. "
-            "Translate every segment completely unless it is explicitly protected by the exception list. "
+            "Translate every segment completely, while respecting the exception list exactly. "
             "Do not leave ordinary words untranslated in the source language. Preserve punctuation, casing, numbers, spacing, and the meaning of technical terms. "
-            "Only keep a token unchanged when it is one of the protected identifiers listed below or a proper noun/acronym that must remain exactly as provided. "
             "Return the result as a fenced JSON code block with a single key 'translations'. "
             "Each entry must have exactly two fields: 'id' and 'text'. The list order must match the input order. "
             + replacement_text
-            + protected_guidance
+            + exception_guidance
         )
         if not context:
             return base
@@ -196,7 +220,14 @@ class OpenAITranslator(BaseTranslator):
             return match.group(1).strip()
         return text.removeprefix("```").removesuffix("```").strip()
 
-    def _request_translation(self, user_content: str, source_lang: str, target_lang: str, context: str | None = None) -> str:
+    def _request_translation(
+        self,
+        user_content: str,
+        source_lang: str,
+        target_lang: str,
+        context: str | None = None,
+        exception_rules: list[ExceptionRule] | None = None,
+    ) -> str:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -211,6 +242,7 @@ class OpenAITranslator(BaseTranslator):
                         target_lang,
                         context,
                         getattr(self, "_protected_replacements", {}),
+                        exception_rules,
                     ),
                 },
                 {"role": "user", "content": user_content},
@@ -250,7 +282,9 @@ class OpenAITranslator(BaseTranslator):
         source_lang: str,
         target_lang: str,
         context: str | None = None,
+        exception_rules: list[ExceptionRule] | None = None,
     ) -> str:
+        rules = exception_rules if exception_rules is not None else self.exception_rules
         user_content = (
             f"Translate the following text from {_language_name(source_lang)} to {_language_name(target_lang)}. "
             "Translate the entire text fully and naturally. Do not leave ordinary words in the source language untranslated. "
@@ -258,7 +292,13 @@ class OpenAITranslator(BaseTranslator):
             "Return only the translated text and nothing else.\n\n"
             f"{text}"
         )
-        translated_text = self._request_translation(user_content, source_lang, target_lang, context=context)
+        translated_text = self._request_translation(
+            user_content,
+            source_lang,
+            target_lang,
+            context=context,
+            exception_rules=rules,
+        )
         cleaned = translated_text.strip()
         if not cleaned:
             raise TranslationError("OpenAI returned an empty translation for a single text")
@@ -270,9 +310,11 @@ class OpenAITranslator(BaseTranslator):
         source_lang: str,
         target_lang: str,
         context: str | None = None,
+        exception_rules: list[ExceptionRule] | None = None,
     ) -> dict[str, str]:
         """Translate every text fragment from a slide in a single API call."""
 
+        rules = exception_rules if exception_rules is not None else self.exception_rules
         unique_texts = list(dict.fromkeys(texts))
         if not unique_texts:
             return {}
@@ -288,7 +330,13 @@ class OpenAITranslator(BaseTranslator):
             + json.dumps({"items": entries_payload}, ensure_ascii=False)
         )
         translated_text = self._strip_json_code_fence(
-            self._request_translation(user_content, source_lang, target_lang, context=context)
+            self._request_translation(
+                user_content,
+                source_lang,
+                target_lang,
+                context=context,
+                exception_rules=rules,
+            )
         )
         try:
             response_json = json.loads(translated_text)
@@ -302,7 +350,13 @@ class OpenAITranslator(BaseTranslator):
             results: dict[str, str] = {}
             for text in unique_texts:
                 try:
-                    results[text] = self._translate_single_text(text, source_lang, target_lang, context=context)
+                    results[text] = self._translate_single_text(
+                        text,
+                        source_lang,
+                        target_lang,
+                        context=context,
+                        exception_rules=rules,
+                    )
                 except TranslationError as exc:
                     raise TranslationError(
                         f"OpenAI per-item translation failed for '{text[:60]}...': {exc}"

@@ -210,7 +210,14 @@ class ParagraphRunFormattingTests(unittest.TestCase):
         class _StubTranslator(BaseTranslator):
             name = "stub"
 
-            def _translate_slide(self, texts, source_lang, target_lang, context=None):
+            def _translate_slide(
+                self,
+                texts,
+                source_lang,
+                target_lang,
+                context=None,
+                exception_rules=None,
+            ):
                 return {text: f"TR:{text}" for text in texts}
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -249,7 +256,14 @@ class ParagraphRunFormattingTests(unittest.TestCase):
         class _StubTranslator(BaseTranslator):
             name = "stub"
 
-            def _translate_slide(self, texts, source_lang, target_lang, context=None):
+            def _translate_slide(
+                self,
+                texts,
+                source_lang,
+                target_lang,
+                context=None,
+                exception_rules=None,
+            ):
                 return {text: f"TR:{text}" for text in texts}
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -358,19 +372,47 @@ class ParagraphRunFormattingTests(unittest.TestCase):
         class _LocalLikeTranslator(BaseTranslator):
             name = "local"
 
-            def _translate_slide(self, texts, source_lang, target_lang, context=None):
+            def _translate_slide(
+                self,
+                texts,
+                source_lang,
+                target_lang,
+                context=None,
+                exception_rules=None,
+            ):
                 raise TranslationError("unexpected batch call")
 
-            def _translate_single_text(self, text, source_lang, target_lang, context=None):
+            def _translate_single_text(
+                self,
+                text,
+                source_lang,
+                target_lang,
+                context=None,
+                exception_rules=None,
+            ):
                 raise TranslationError("local item failed")
 
         class _FallbackTranslator(BaseTranslator):
             name = "fallback"
 
-            def _translate_slide(self, texts, source_lang, target_lang, context=None):
+            def _translate_slide(
+                self,
+                texts,
+                source_lang,
+                target_lang,
+                context=None,
+                exception_rules=None,
+            ):
                 return {text: f"TR:{text}" for text in texts}
 
-            def _translate_single_text(self, text, source_lang, target_lang, context=None):
+            def _translate_single_text(
+                self,
+                text,
+                source_lang,
+                target_lang,
+                context=None,
+                exception_rules=None,
+            ):
                 return f"TR:{text}"
 
         translator = _LocalLikeTranslator()
@@ -385,19 +427,47 @@ class ParagraphRunFormattingTests(unittest.TestCase):
         class _RemoteLikeTranslator(BaseTranslator):
             name = "openai"
 
-            def _translate_slide(self, texts, source_lang, target_lang, context=None):
+            def _translate_slide(
+                self,
+                texts,
+                source_lang,
+                target_lang,
+                context=None,
+                exception_rules=None,
+            ):
                 raise TranslationError("batch failed")
 
-            def _translate_single_text(self, text, source_lang, target_lang, context=None):
+            def _translate_single_text(
+                self,
+                text,
+                source_lang,
+                target_lang,
+                context=None,
+                exception_rules=None,
+            ):
                 raise TranslationError("single item failed")
 
         class _LocalFallback(BaseTranslator):
             name = "local"
 
-            def _translate_slide(self, texts, source_lang, target_lang, context=None):
+            def _translate_slide(
+                self,
+                texts,
+                source_lang,
+                target_lang,
+                context=None,
+                exception_rules=None,
+            ):
                 return {text: text for text in texts}
 
-            def _translate_single_text(self, text, source_lang, target_lang, context=None):
+            def _translate_single_text(
+                self,
+                text,
+                source_lang,
+                target_lang,
+                context=None,
+                exception_rules=None,
+            ):
                 return text
 
         translator = _RemoteLikeTranslator()

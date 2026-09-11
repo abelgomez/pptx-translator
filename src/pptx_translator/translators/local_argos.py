@@ -20,6 +20,12 @@ from __future__ import annotations
 import logging
 import threading
 
+from ..exceptions_list import (
+    apply_exception_rules,
+    mask_exception_rules,
+    restore_exception_rules,
+    split_rules_by_mode,
+)
 from .base import BaseTranslator, TranslationError
 
 logger = logging.getLogger(__name__)
@@ -128,12 +134,31 @@ class LocalArgosTranslator(BaseTranslator):
             argos_package.install_from_path(downloaded_path)
             _installed_pairs.add(pair)
 
+    def _translate_single_text(
+        self,
+        text: str,
+        source_lang: str,
+        target_lang: str,
+        context: str | None = None,
+        exception_rules=None,
+    ) -> str:
+        rules = exception_rules if exception_rules is not None else self.exception_rules
+        result = self._translate_slide(
+            [text],
+            source_lang,
+            target_lang,
+            context=context,
+            exception_rules=rules,
+        )
+        return result.get(text, text)
+
     def _translate_slide(
         self,
         texts: list[str],
         source_lang: str,
         target_lang: str,
         context: str | None = None,
+        exception_rules=None,
     ) -> dict[str, str]:
         import argostranslate.translate as argos_translate
 
@@ -141,4 +166,19 @@ class LocalArgosTranslator(BaseTranslator):
 
         source = source_lang if source_lang not in ("", "auto") else "es"
         self._ensure_language_pair(source, target_lang)
-        return {text: argos_translate.translate(text, source, target_lang) for text in dict.fromkeys(texts)}
+        rules = exception_rules if exception_rules is not None else self.exception_rules
+        pre_rules, protected_rules = split_rules_by_mode(rules)
+
+        translated: dict[str, str] = {}
+        for text in dict.fromkeys(texts):
+            processed = text
+            replacements: dict[str, str] = {}
+            if pre_rules:
+                processed = apply_exception_rules(processed, pre_rules)
+            if protected_rules:
+                processed, replacements = mask_exception_rules(processed, protected_rules)
+            result = argos_translate.translate(processed, source, target_lang)
+            if replacements:
+                result = restore_exception_rules(result, replacements)
+            translated[text] = result
+        return translated

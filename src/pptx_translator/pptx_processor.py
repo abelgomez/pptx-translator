@@ -21,13 +21,7 @@ from pptx.oxml.ns import qn
 from pptx.slide import Slide
 from pptx.util import Length
 
-from .exceptions_list import (
-    ExceptionRule,
-    apply_exception_rules,
-    mask_exception_rules,
-    restore_exception_rules,
-    split_rules_by_mode,
-)
+from .exceptions_list import ExceptionRule
 from .figure_heuristics import looks_like_figure_label
 from .lang import detect_language
 from .media import remove_audio_from_slide
@@ -252,10 +246,10 @@ class PresentationTranslator:
     ):
         self.translator = translator
         self.fallback_translator = fallback_translator
-        self.exception_rules = exception_rules or []
-        self._pre_translation_rules, self._protected_rules = split_rules_by_mode(
-            self.exception_rules
-        )
+        self.exception_rules = list(exception_rules or [])
+        self.translator.exception_rules = self.exception_rules
+        if self.fallback_translator is not None:
+            self.fallback_translator.exception_rules = self.exception_rules
         self.sample_chars_for_detection = sample_chars_for_detection
         self.remove_audio = remove_audio
 
@@ -460,39 +454,12 @@ class PresentationTranslator:
         # 3. Collect all text units to translate.
         jobs = self._collect_jobs(prs, stats)
 
-        # 4. Apply user-defined translation exceptions:
-        #    - '<' (pre-translation) rules are substituted directly, since
-        #      their destination text is expected to already be in the
-        #      target language and can be translated along with the rest.
-        #    - '!'/'~' (strict) rules are protected with placeholder tokens
-        #      so the translator cannot alter them, then restored verbatim
-        #      once translation is complete.
-        #    Texts are grouped per slide so the translation unit is the slide.
-        next_placeholder_index = 0
-        for job in jobs:
-            if self._pre_translation_rules:
-                job.original_text = apply_exception_rules(
-                    job.original_text, self._pre_translation_rules
-                )
-            if self._protected_rules:
-                job.original_text, job.exception_replacements = mask_exception_rules(
-                    job.original_text,
-                    self._protected_rules,
-                    start_index=next_placeholder_index,
-                )
-                next_placeholder_index += len(job.exception_replacements)
-
+        # 4. The exception list is passed to each translator so that it can
+        #    apply its own backend-specific policy (for example, placeholder
+        #    masking in local Argos or explicit guidance in the OpenAI prompt).
         unique_texts = {job.original_text for job in jobs}
         stats.unique_texts = len(unique_texts)
         context = self._collect_first_slide_context(prs)
-        protected_replacements = {
-            token: value
-            for job in jobs
-            for token, value in job.exception_replacements.items()
-        }
-        for provider in (self.translator, self.fallback_translator):
-            if provider is not None:
-                provider._protected_replacements = protected_replacements
         try:
             self.translator.on_presentation_start(context)
             translations: dict[str, str] = {}
@@ -520,21 +487,19 @@ class PresentationTranslator:
                     target_lang,
                     fallback=self.fallback_translator,
                     context=context,
+                    exception_rules=self.exception_rules,
                 )
                 translations.update(slide_translations)
                 failed_texts.extend(slide_failed)
         finally:
             for provider in (self.translator, self.fallback_translator):
                 if provider is not None:
-                    provider._protected_replacements = {}
+                    provider.exception_rules = self.exception_rules
         stats.failed_texts = len(failed_texts)
 
         # 5. Write the translations back into the presentation.
         for job in jobs:
             translated_text = translations.get(job.original_text, job.original_text)
-            translated_text = restore_exception_rules(
-                translated_text, job.exception_replacements
-            )
             if job.kind == "figure":
                 _set_text_frame_single_text(job.target, translated_text)
                 _apply_text_frame_fit(job.text_frame or job.target, translated_text)

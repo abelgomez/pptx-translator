@@ -284,15 +284,21 @@ they are supplied via a plain-text file passed with `-e`/`--exceptions`.
   | `~` | Strict, case-insensitive | ignores case | Same guarantee as `!`, but the source expression is matched ignoring case. |
   | *(none)* | Same as `~` | ignores case | Kept for backward compatibility with exception files written before this feature existed. |
 
-  The "strict" modes (`!`/`~`) work by temporarily replacing every match
-  with an internal placeholder token before calling the translator, and
-  substituting the correct destination text back in once translation is
-  complete — this is what actually guarantees the exact output, since it
+  The exact enforcement strategy is backend-specific. The local Argos
+  provider applies the strict modes by temporarily replacing each match with
+  an internal placeholder token before calling the engine and restoring the
+  final destination expression afterward. This preserves the exact output and
   prevents the translation engine from mistranslating or rewording the
   protected term (e.g. turning "SGA" into "USG"). The placeholder tokens
-  are plain lowercase words (no digits, underscores, or punctuation) so
-  they survive tokenization/detokenization by the underlying translation
-  engines without being corrupted.
+  are plain lowercase words (no digits, underscores, or punctuation) so they
+  survive tokenization/detokenization by the underlying translation engine
+  without being corrupted.
+
+  The OpenAI-compatible provider does not preprocess the text with those
+  placeholders. Instead, the original text is sent as-is, and the prompt
+  includes the exception list so the model is explicitly told which source
+  terms must appear as their target equivalents.
+  
 - The rules are applied in the file's order.
 
 **Numeric wildcard:** `{num}` matches one or more digits.
@@ -351,8 +357,12 @@ TRANSLATOR_REMOVE_AUDIO=false
      one unit.
    - **Speaker notes**: treated the same way as regular content (never as
      a figure), paragraph by paragraph.
-5. Apply the user-supplied translation exceptions (if any) to every
-   collected text before translation.
+5. Pass the user-supplied translation exceptions (if any) to the selected
+   translator. The processor itself does not enforce the exception rules.
+   Each backend decides how to honor them:
+   - the local Argos provider uses placeholder masking/restoration;
+   - the OpenAI-compatible provider keeps the original text and spells out
+     the required replacements in its system prompt.
 6. Deduplicate identical texts and translate each unique string only once
    (with caching and retries), to minimize the number of translation calls.
 7. Write the translations back:

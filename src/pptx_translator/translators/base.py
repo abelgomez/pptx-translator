@@ -5,7 +5,7 @@ from __future__ import annotations
 import abc
 import logging
 import time
-from typing import Iterable
+from typing import Any, Iterable, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -15,16 +15,7 @@ class TranslationError(RuntimeError):
 
 
 class BaseTranslator(abc.ABC):
-    """Base class providing retries, rate limiting and caching.
-
-    Subclasses only need to implement :meth:`_translate_slide`. This class
-    takes care of:
-
-    * Not repeating calls for texts already translated (in-memory cache).
-    * Spacing out API calls (``request_delay_seconds``) to avoid abusing
-      the service and getting the application blocked.
-    * Retrying with exponential backoff on transient errors.
-    """
+    """Common contract for all translation backends."""
 
     name = "base"
 
@@ -33,12 +24,14 @@ class BaseTranslator(abc.ABC):
         request_delay_seconds: float = 0.4,
         max_retries: int = 4,
         retry_backoff_seconds: float = 2.0,
+        exception_rules: Sequence[Any] | None = None,
     ) -> None:
         self.request_delay_seconds = request_delay_seconds
         self.max_retries = max_retries
         self.retry_backoff_seconds = retry_backoff_seconds
+        self.exception_rules = list(exception_rules) if exception_rules is not None else []
         self._cache: dict[tuple[str, str, str, str | None], str] = {}
-        self._last_request_ts: float = 0.0
+        self._last_request_ts = 0.0
 
     @abc.abstractmethod
     def _translate_slide(
@@ -47,8 +40,27 @@ class BaseTranslator(abc.ABC):
         source_lang: str,
         target_lang: str,
         context: str | None = None,
+        exception_rules: Sequence[Any] | None = None,
     ) -> dict[str, str]:
-        """Translates a batch of texts for a single slide. Must be implemented by each provider."""
+        """Translate a batch of texts for one slide."""
+
+    def _translate_single_text(
+        self,
+        text: str,
+        source_lang: str,
+        target_lang: str,
+        context: str | None = None,
+        exception_rules: Sequence[Any] | None = None,
+    ) -> str:
+        rules = exception_rules if exception_rules is not None else self.exception_rules
+        translated_by_text = self._translate_slide(
+            [text],
+            source_lang,
+            target_lang,
+            context=context,
+            exception_rules=rules,
+        )
+        return translated_by_text.get(text, text)
 
     def on_presentation_start(self, context: str | None = None) -> None:
         """Hook called once when translating a presentation."""
@@ -61,21 +73,6 @@ class BaseTranslator(abc.ABC):
         if remaining > 0:
             time.sleep(remaining)
 
-    def _translate_single_text(
-        self,
-        text: str,
-        source_lang: str,
-        target_lang: str,
-        context: str | None = None,
-    ) -> str:
-        """Internal implementation detail used for per-item retry logic.
-
-        This is intentionally not part of the public API: providers may choose
-        to keep their single-text logic private to the fallback path.
-        """
-        translated_by_text = self._translate_slide([text], source_lang, target_lang, context=context)
-        return translated_by_text.get(text, text)
-
     def translate_slide(
         self,
         texts: Iterable[str],
@@ -83,28 +80,33 @@ class BaseTranslator(abc.ABC):
         target_lang: str,
         fallback: "BaseTranslator | None" = None,
         context: str | None = None,
+        exception_rules: Sequence[Any] | None = None,
     ) -> tuple[dict[str, str], list[str]]:
-        """Translates every text item in a single slide.
-
-        Returns ```(results, failed)`` where ``results`` maps the original text
-        to its translated value, and ``failed`` collects entries that could not
-        be translated even after trying the fallback provider.
-        """
+        """Translate a batch of texts. Return (results, failed)."""
 
         unique_texts = list(dict.fromkeys(texts))
         results: dict[str, str] = {}
         failed: list[str] = []
+        rules = exception_rules if exception_rules is not None else self.exception_rules
 
         try:
-            translated_by_text = self._translate_slide(unique_texts, source_lang, target_lang, context=context)
+            translated_by_text = self._translate_slide(
+                unique_texts,
+                source_lang,
+                target_lang,
+                context=context,
+                exception_rules=rules,
+            )
+        except TranslationError:
             for text in unique_texts:
-                results[text] = translated_by_text.get(text, text)
-            return results, failed
-        except TranslationError as primary_exc:
-            for text in unique_texts:
-                translated = None
                 try:
-                    translated = self._translate_single_text(text, source_lang, target_lang, context=context)
+                    translated = self._translate_single_text(
+                        text,
+                        source_lang,
+                        target_lang,
+                        context=context,
+                        exception_rules=rules,
+                    )
                 except TranslationError as inner_exc:
                     if self.name == "local":
                         logger.warning(
@@ -112,14 +114,11 @@ class BaseTranslator(abc.ABC):
                             self.name,
                             text[:60],
                         )
-                        results[text] = text
+                        translated = text
                         failed.append(text)
-                        continue
-
-                    if fallback is not None:
+                    elif fallback is not None:
                         logger.warning(
-                            "[%s] Could not translate '%s...'; trying the fallback "
-                            "provider '%s'.",
+                            "[%s] Could not translate '%s...'; trying the fallback provider '%s'.",
                             self.name,
                             text[:60],
                             fallback.name,
@@ -130,17 +129,18 @@ class BaseTranslator(abc.ABC):
                                 source_lang,
                                 target_lang,
                                 context=context,
+                                exception_rules=fallback.exception_rules,
                             )
                         except TranslationError as fallback_exc:
                             logger.error(
-                                "[%s] The fallback provider could not translate "
-                                "'%s...' either: %s",
+                                "[%s] The fallback provider could not translate '%s...' either: %s",
                                 fallback.name,
                                 text[:60],
                                 fallback_exc,
                             )
-
-                    if translated is None:
+                            translated = text
+                            failed.append(text)
+                    else:
                         logger.error(
                             "Could not translate '%s...'; keeping the original text. Cause: %s",
                             text[:60],
@@ -149,6 +149,9 @@ class BaseTranslator(abc.ABC):
                         translated = text
                         failed.append(text)
 
-                results[text] = translated if translated is not None else text
-
+                results[text] = translated
             return results, failed
+
+        for text in unique_texts:
+            results[text] = translated_by_text.get(text, text)
+        return results, failed
