@@ -137,6 +137,15 @@ python translate_pptx.py presentation.pptx -t en
 
 This creates `presentation_en.pptx` next to the original file.
 
+When an input file already ends with the target-language suffix (for example,
+`presentation_en.pptx` when translating to `en`), it is skipped and a
+warning is logged instead of being translated again.
+
+The output file name is always computed as `<original_stem>_<target_lang>.pptx`.
+**Important:** if a file with that destination name already exists, it will be
+overwritten without prompting. This is intentional for convenience, but it
+can cause data loss if you do not pay attention to the final filename.
+
 When the input is a directory, the program looks for `.pptx` files and
 translates each one in turn. By default it only processes files directly
 inside that directory; use `-r`/`--recursive` to include nested folders as
