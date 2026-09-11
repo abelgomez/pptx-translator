@@ -467,11 +467,11 @@ figure-detection heuristics:
 python -m unittest discover -s tests -v
 ```
 
-To manually validate the full pipeline end-to-end, use the provided sample
-presentation:
+To manually validate the full pipeline end-to-end on a real file, run the
+tool against any `.pptx` file you want to translate:
 
 ```powershell
-python translate_pptx.py "P1 Introduction to Oracle\practica1.pptx" -t en -e exceptions.txt -v
+python translate_pptx.py "test.pptx" -t en -v
 ```
 
 For maximum detail, use `-vv` to switch to `DEBUG` logging. By default the
