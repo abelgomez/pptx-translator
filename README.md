@@ -302,8 +302,8 @@ python translate_pptx.py practica1.pptx -t en --provider openai --api-key "$OPEN
 The log level can be configured in two ways:
 
 - **`TRANSLATOR_LOG_LEVEL` environment variable** (or in your `.env` file):
-  one of `ERROR`, `WARN` (an alias of `WARNING`), `INFO`, or `DEBUG`.
-  Defaults to `WARN` if unset or set to an unrecognized value.
+  one of `ERROR`, `WARNING`, `INFO`, or `DEBUG`.
+  Defaults to `WARNING` if unset or set to an unrecognized value.
 - **`-v`/`-vv` command-line flags**: always take precedence over
   `TRANSLATOR_LOG_LEVEL` when given. `-v` forces `INFO`, `-vv` forces
   `DEBUG`.
@@ -313,6 +313,10 @@ Windows (PowerShell):
 ```powershell
 # Only errors, no warnings
 $env:TRANSLATOR_LOG_LEVEL = "ERROR"
+python translate_pptx.py practica1.pptx -t en
+
+# Standard warnings and errors (default behavior)
+$env:TRANSLATOR_LOG_LEVEL = "WARNING"
 python translate_pptx.py practica1.pptx -t en
 
 # Verbose progress information (equivalent to -v)
@@ -328,6 +332,10 @@ Linux/macOS (POSIX shell):
 ```bash
 # Only errors, no warnings
 export TRANSLATOR_LOG_LEVEL="ERROR"
+python translate_pptx.py practica1.pptx -t en
+
+# Standard warnings and errors (default behavior)
+export TRANSLATOR_LOG_LEVEL="WARNING"
 python translate_pptx.py practica1.pptx -t en
 
 # Verbose progress information (equivalent to -v)
@@ -416,7 +424,7 @@ runtime behavior such as logging and optional preprocessing.
 
 ```dotenv
 TRANSLATOR_PROVIDER=local
-TRANSLATOR_LOG_LEVEL=WARN
+TRANSLATOR_LOG_LEVEL=WARNING
 TRANSLATOR_REMOVE_AUDIO=false
 ```
 
@@ -475,7 +483,7 @@ python translate_pptx.py "test.pptx" -t en -v
 ```
 
 For maximum detail, use `-vv` to switch to `DEBUG` logging. By default the
-tool logs only warnings and errors (`WARN` level, configurable via
+tool logs only warnings and errors (`WARNING` level, configurable via
 `TRANSLATOR_LOG_LEVEL`; see [Logging](#logging)).
 ## Troubleshooting
 
