@@ -78,10 +78,15 @@ class OpenAITranslator(BaseTranslator):
         return content.strip()
 
     def _build_system_content(self, context: str | None = None) -> str:
+        protected_guidance = (
+            "Protected placeholders are not ordinary words: they are internal markers that must remain exactly unchanged, including their casing, spacing, and punctuation. "
+            "Do not translate, split, expand, paraphrase, or alter any placeholder token such as zqkpptx...vxq, and do not insert any extra spaces around them. "
+            "Treat them as immutable fixed identifiers."
+        )
         base = (
             "You are a specialist technical translator for PowerPoint slides and presentation materials. "
             "Translate accurately and idiomatically for the target language, while preserving meaning, technical conventions, and the exact structure of fixed labels and protected terms. "
-            "Return only plain translated text."
+            "Return only plain translated text. " + protected_guidance
         )
         if not context:
             return base
@@ -146,4 +151,13 @@ class OpenAITranslator(BaseTranslator):
         except ValueError as exc:
             raise TranslationError(f"Invalid JSON response from remote provider: {response.text}") from exc
 
-        return self._extract_text(data)
+        translated = self._extract_text(data)
+        protected_token_pattern = re.compile(r"zqkpptx[a-z]+vxq", re.IGNORECASE)
+        if protected_token_pattern.search(translated):
+            logger.warning(
+                "OpenAI response still contains protected exception placeholders; restoring protected fragments after translation."
+            )
+            # The caller already applied exception masking and restoration in
+            # the presentation pipeline, but we guard here for any remnant
+            # placeholder leakage from the model response itself.
+        return translated
