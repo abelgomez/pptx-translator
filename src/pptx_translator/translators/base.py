@@ -61,48 +61,20 @@ class BaseTranslator(abc.ABC):
         if remaining > 0:
             time.sleep(remaining)
 
-    def translate(
+    def _translate_single_text(
         self,
         text: str,
         source_lang: str,
         target_lang: str,
         context: str | None = None,
     ) -> str:
-        """Translates ``text`` by delegating to the single-slide implementation."""
+        """Internal implementation detail used for per-item retry logic.
 
-        if not text or not text.strip():
-            return text
-
-        cache_key = (text, source_lang, target_lang, context)
-        if cache_key in self._cache:
-            return self._cache[cache_key]
-
-        last_error: Exception | None = None
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                self._throttle()
-                translated = self._translate_slide([text], source_lang, target_lang, context=context).get(text, text)
-                self._last_request_ts = time.monotonic()
-                if translated is None or translated == "":
-                    translated = text
-                self._cache[cache_key] = translated
-                return translated
-            except Exception as exc:  # noqa: BLE001 - we want to retry any transient failure
-                last_error = exc
-                wait = self.retry_backoff_seconds * attempt
-                logger.warning(
-                    "[%s] Translation failed (attempt %d/%d): %s. Retrying in %.1fs...",
-                    self.name,
-                    attempt,
-                    self.max_retries,
-                    exc,
-                    wait,
-                )
-                time.sleep(wait)
-
-        raise TranslationError(
-            f"Could not translate the text after {self.max_retries} attempts: {last_error}"
-        )
+        This is intentionally not part of the public API: providers may choose
+        to keep their single-text logic private to the fallback path.
+        """
+        translated_by_text = self._translate_slide([text], source_lang, target_lang, context=context)
+        return translated_by_text.get(text, text)
 
     def translate_slide(
         self,
@@ -122,20 +94,28 @@ class BaseTranslator(abc.ABC):
         unique_texts = list(dict.fromkeys(texts))
         results: dict[str, str] = {}
         failed: list[str] = []
-        total = len(unique_texts)
 
         try:
             translated_by_text = self._translate_slide(unique_texts, source_lang, target_lang, context=context)
-            for index, text in enumerate(unique_texts, start=1):
-                translated = translated_by_text.get(text, text)
-                results[text] = translated
+            for text in unique_texts:
+                results[text] = translated_by_text.get(text, text)
             return results, failed
         except TranslationError as primary_exc:
-            for index, text in enumerate(unique_texts, start=1):
+            for text in unique_texts:
+                translated = None
                 try:
-                    results[text] = self.translate(text, source_lang, target_lang, context=context)
+                    translated = self._translate_single_text(text, source_lang, target_lang, context=context)
                 except TranslationError as inner_exc:
-                    translated = None
+                    if self.name == "local":
+                        logger.warning(
+                            "[%s] Could not translate '%s...'; keeping the original text without fallback.",
+                            self.name,
+                            text[:60],
+                        )
+                        results[text] = text
+                        failed.append(text)
+                        continue
+
                     if fallback is not None:
                         logger.warning(
                             "[%s] Could not translate '%s...'; trying the fallback "
@@ -145,7 +125,12 @@ class BaseTranslator(abc.ABC):
                             fallback.name,
                         )
                         try:
-                            translated = fallback.translate(text, source_lang, target_lang, context=context)
+                            translated = fallback._translate_single_text(
+                                text,
+                                source_lang,
+                                target_lang,
+                                context=context,
+                            )
                         except TranslationError as fallback_exc:
                             logger.error(
                                 "[%s] The fallback provider could not translate "
@@ -154,14 +139,16 @@ class BaseTranslator(abc.ABC):
                                 text[:60],
                                 fallback_exc,
                             )
-                    if translated is not None:
-                        results[text] = translated
-                    else:
+
+                    if translated is None:
                         logger.error(
                             "Could not translate '%s...'; keeping the original text. Cause: %s",
                             text[:60],
                             inner_exc,
                         )
-                        results[text] = text
+                        translated = text
                         failed.append(text)
+
+                results[text] = translated if translated is not None else text
+
             return results, failed

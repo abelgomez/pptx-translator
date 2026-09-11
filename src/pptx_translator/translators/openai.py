@@ -141,19 +141,7 @@ class OpenAITranslator(BaseTranslator):
             restored = re.sub(re.escape(token), lambda _m, v=value: v, restored, flags=re.IGNORECASE)
         return restored
 
-    def _translate_slide(
-        self,
-        texts: list[str],
-        source_lang: str,
-        target_lang: str,
-        context: str | None = None,
-    ) -> dict[str, str]:
-        """Translate every text fragment from a slide in a single API call."""
-
-        unique_texts = list(dict.fromkeys(texts))
-        if not unique_texts:
-            return {}
-
+    def _request_translation(self, user_content: str, source_lang: str, target_lang: str, context: str | None = None) -> str:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -168,29 +156,18 @@ class OpenAITranslator(BaseTranslator):
                         getattr(self, "_protected_replacements", {}),
                     ),
                 },
-                {
-                    "role": "user",
-                    "content": (
-                        "Translate each item in the JSON array below from "
-                        f"{source_lang} to {target_lang}. Return a JSON object with a "
-                        "single key 'translations' whose value is a list of objects like "
-                        '{"id": "source text", "text": "translated text"}. Keep the same order as the input array. Do not include any extra text outside the JSON.\n\n'
-                        + json.dumps({
-                            "items": [{"id": text, "text": text} for text in unique_texts]
-                        })
-                    ),
-                },
+                {"role": "user", "content": user_content},
             ],
             "temperature": 0,
         }
+
         logger.info(
-            "Invoking OpenAI-compatible API for slide translation (model=%s, texts=%d, source=%s, target=%s)",
+            "Invoking OpenAI-compatible API (model=%s, source=%s, target=%s)",
             self.model,
-            len(unique_texts),
             source_lang,
             target_lang,
         )
-        logger.debug("OpenAI slide request payload: %s", json.dumps(payload, ensure_ascii=False, indent=2))
+        logger.debug("OpenAI request payload: %s", json.dumps(payload, ensure_ascii=False, indent=2))
 
         response = requests.post(
             f"{self.api_base_url}/chat/completions",
@@ -208,7 +185,49 @@ class OpenAITranslator(BaseTranslator):
         except ValueError as exc:
             raise TranslationError(f"Invalid JSON response from remote provider: {response.text}") from exc
 
-        translated_text = self._extract_text(data)
+        return self._extract_text(data)
+
+    def _translate_single_text(
+        self,
+        text: str,
+        source_lang: str,
+        target_lang: str,
+        context: str | None = None,
+    ) -> str:
+        user_content = (
+            f"Translate the following text from {source_lang} to {target_lang}. "
+            "Return only the translated text and nothing else.\n\n"
+            f"{text}"
+        )
+        translated_text = self._request_translation(user_content, source_lang, target_lang, context=context)
+        cleaned = translated_text.strip()
+        if not cleaned:
+            raise TranslationError("OpenAI returned an empty translation for a single text")
+        return self._restore_protected_replacements(cleaned)
+
+    def _translate_slide(
+        self,
+        texts: list[str],
+        source_lang: str,
+        target_lang: str,
+        context: str | None = None,
+    ) -> dict[str, str]:
+        """Translate every text fragment from a slide in a single API call."""
+
+        unique_texts = list(dict.fromkeys(texts))
+        if not unique_texts:
+            return {}
+
+        user_content = (
+            "Translate each item in the JSON array below from "
+            f"{source_lang} to {target_lang}. Return a JSON object with a "
+            "single key 'translations' whose value is a list of objects like "
+            '{"id": "source text", "text": "translated text"}. Keep the same order as the input array. Do not include any extra text outside the JSON.\n\n'
+            + json.dumps({
+                "items": [{"id": text, "text": text} for text in unique_texts]
+            })
+        )
+        translated_text = self._request_translation(user_content, source_lang, target_lang, context=context)
         try:
             response_json = json.loads(translated_text)
             entries = response_json.get("translations", [])
@@ -216,9 +235,17 @@ class OpenAITranslator(BaseTranslator):
                 raise ValueError("No 'translations' array in response")
         except (TypeError, ValueError, json.JSONDecodeError):
             logger.warning(
-                "OpenAI slide response was not valid JSON; falling back to per-item translation."
+                "OpenAI slide response was not valid JSON; retrying with per-item requests."
             )
-            raise TranslationError("OpenAI slide response was not valid JSON")
+            results: dict[str, str] = {}
+            for text in unique_texts:
+                try:
+                    results[text] = self._translate_single_text(text, source_lang, target_lang, context=context)
+                except TranslationError as exc:
+                    raise TranslationError(
+                        f"OpenAI per-item translation failed for '{text[:60]}...': {exc}"
+                    ) from exc
+            return results
 
         results: dict[str, str] = {}
         for entry in entries:
@@ -229,4 +256,3 @@ class OpenAITranslator(BaseTranslator):
             if item_id and isinstance(item_text, str):
                 results[item_id] = self._restore_protected_replacements(item_text)
         return results
-

@@ -21,7 +21,7 @@ from pptx_translator.cli import _resolve_log_level
 from pptx_translator.figure_heuristics import looks_like_figure_label
 from pptx_translator import media as media_module
 from pptx_translator.pptx_processor import PresentationTranslator
-from pptx_translator.translators.base import BaseTranslator
+from pptx_translator.translators.base import BaseTranslator, TranslationError
 from pptx_translator.translators.factory import create_translator
 from pptx_translator.config import Settings
 from pptx.oxml.ns import qn
@@ -297,6 +297,91 @@ class ParagraphRunFormattingTests(unittest.TestCase):
 
         self.assertIn("zqkpptxaxvxq -> SGA", content)
         self.assertIn("zqkpptxbyvxq -> Practical Lesson 1", content)
+
+    def test_openai_slide_translation_uses_json_payload_for_batch_requests(self):
+        from pptx_translator.translators.openai import OpenAITranslator
+
+        translator = OpenAITranslator(api_key="demo", api_base_url="https://example.test/v1")
+        with patch("pptx_translator.translators.openai.requests.post") as mock_post:
+            mock_post.return_value.status_code = 200
+            mock_post.return_value.json.return_value = {
+                "choices": [{"message": {"content": '{"translations":[{"id":"Hola","text":"Hello"}]}'}}]
+            }
+
+            result = translator._translate_slide(["Hola"], "es", "en")
+
+        self.assertEqual(result, {"Hola": "Hello"})
+        payload = mock_post.call_args.kwargs["json"]
+        self.assertIn("single key 'translations'", payload["messages"][1]["content"])
+        self.assertIn('"items":', payload["messages"][1]["content"])
+
+    def test_openai_slide_retries_with_single_text_calls_when_json_parse_fails(self):
+        from pptx_translator.translators.openai import OpenAITranslator
+
+        translator = OpenAITranslator(api_key="demo", api_base_url="https://example.test/v1")
+        responses = [
+            unittest.mock.Mock(status_code=200, json=unittest.mock.Mock(return_value={"choices": [{"message": {"content": "not-json"}}]})),
+            unittest.mock.Mock(status_code=200, json=unittest.mock.Mock(return_value={"choices": [{"message": {"content": "Hello"}}]})),
+        ]
+
+        with patch("pptx_translator.translators.openai.requests.post", side_effect=responses) as mock_post:
+            result = translator._translate_slide(["Hola"], "es", "en")
+
+        self.assertEqual(result, {"Hola": "Hello"})
+        self.assertEqual(mock_post.call_count, 2)
+        self.assertIn("Translate the following text", mock_post.call_args_list[1].kwargs["json"]["messages"][1]["content"])
+
+    def test_local_translator_keeps_original_text_when_individual_item_fails(self):
+        class _LocalLikeTranslator(BaseTranslator):
+            name = "local"
+
+            def _translate_slide(self, texts, source_lang, target_lang, context=None):
+                raise TranslationError("unexpected batch call")
+
+            def _translate_single_text(self, text, source_lang, target_lang, context=None):
+                raise TranslationError("local item failed")
+
+        class _FallbackTranslator(BaseTranslator):
+            name = "fallback"
+
+            def _translate_slide(self, texts, source_lang, target_lang, context=None):
+                return {text: f"TR:{text}" for text in texts}
+
+            def _translate_single_text(self, text, source_lang, target_lang, context=None):
+                return f"TR:{text}"
+
+        translator = _LocalLikeTranslator()
+        results, failed = translator.translate_slide(["Práctica"], "es", "en", fallback=_FallbackTranslator())
+
+        self.assertEqual(results, {"Práctica": "Práctica"})
+        self.assertEqual(failed, ["Práctica"])
+
+    def test_remote_translator_uses_local_fallback_after_single_item_failures(self):
+        from pptx_translator.translators.base import TranslationError
+
+        class _RemoteLikeTranslator(BaseTranslator):
+            name = "openai"
+
+            def _translate_slide(self, texts, source_lang, target_lang, context=None):
+                raise TranslationError("batch failed")
+
+            def _translate_single_text(self, text, source_lang, target_lang, context=None):
+                raise TranslationError("single item failed")
+
+        class _LocalFallback(BaseTranslator):
+            name = "local"
+
+            def _translate_slide(self, texts, source_lang, target_lang, context=None):
+                return {text: text for text in texts}
+
+            def _translate_single_text(self, text, source_lang, target_lang, context=None):
+                return text
+
+        translator = _RemoteLikeTranslator()
+        results, failed = translator.translate_slide(["Práctica"], "es", "en", fallback=_LocalFallback())
+
+        self.assertEqual(results, {"Práctica": "Práctica"})
+        self.assertEqual(failed, [])
 
 
 class CliLoggingTests(unittest.TestCase):
