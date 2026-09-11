@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -140,32 +141,23 @@ class OpenAITranslator(BaseTranslator):
             restored = re.sub(re.escape(token), lambda _m, v=value: v, restored, flags=re.IGNORECASE)
         return restored
 
-    def _translate_one(
+    def _translate_slide(
         self,
-        text: str,
+        texts: list[str],
         source_lang: str,
         target_lang: str,
         context: str | None = None,
-    ) -> str:
+    ) -> dict[str, str]:
+        """Translate every text fragment from a slide in a single API call."""
+
+        unique_texts = list(dict.fromkeys(texts))
+        if not unique_texts:
+            return {}
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        prompt = (
-            f"Translate the following {source_lang} text into {target_lang}. "
-            "The text comes from a PowerPoint presentation and may be a slide sentence, a short label, "
-            "a diagram caption, or part of a speaker note.\n\n"
-            "Requirements:\n"
-            "1. Return only the final translated text, with no explanation, no markdown, no code fences, and no extra commentary.\n"
-            "2. Preserve the original meaning, tone, and intent exactly; do not add or remove information.\n"
-            "3. Use natural, idiomatic target-language wording for the context, especially for short labels and technical terminology.\n"
-            "4. Preserve technical terms, acronyms, product names, units, numbers, dates, labels, and placeholders exactly when they are fixed domain terms or protected identifiers.\n"
-            "5. Keep punctuation, capitalization, and sentence boundaries consistent with the source.\n"
-            "6. If the source is a short label or caption, translate it as a concise label, not as a long explanatory sentence.\n"
-            "7. If the text is already in the target language or is a proper noun, leave it unchanged unless the target language convention explicitly requires a different form.\n"
-            "8. Do not hallucinate or invent content that is not present in the source text.\n\n"
-            f"Text to translate:\n{text}"
-        )
         payload = {
             "model": self.model,
             "messages": [
@@ -176,10 +168,30 @@ class OpenAITranslator(BaseTranslator):
                         getattr(self, "_protected_replacements", {}),
                     ),
                 },
-                {"role": "user", "content": prompt},
+                {
+                    "role": "user",
+                    "content": (
+                        "Translate each item in the JSON array below from "
+                        f"{source_lang} to {target_lang}. Return a JSON object with a "
+                        "single key 'translations' whose value is a list of objects like "
+                        '{"id": "source text", "text": "translated text"}. Keep the same order as the input array. Do not include any extra text outside the JSON.\n\n'
+                        + json.dumps({
+                            "items": [{"id": text, "text": text} for text in unique_texts]
+                        })
+                    ),
+                },
             ],
             "temperature": 0,
         }
+        logger.info(
+            "Invoking OpenAI-compatible API for slide translation (model=%s, texts=%d, source=%s, target=%s)",
+            self.model,
+            len(unique_texts),
+            source_lang,
+            target_lang,
+        )
+        logger.debug("OpenAI slide request payload: %s", json.dumps(payload, ensure_ascii=False, indent=2))
+
         response = requests.post(
             f"{self.api_base_url}/chat/completions",
             headers=headers,
@@ -196,11 +208,25 @@ class OpenAITranslator(BaseTranslator):
         except ValueError as exc:
             raise TranslationError(f"Invalid JSON response from remote provider: {response.text}") from exc
 
-        translated = self._extract_text(data)
-        translated = self._restore_protected_replacements(translated)
-        protected_token_pattern = re.compile(r"zqkpptx[a-z]+vxq", re.IGNORECASE)
-        if protected_token_pattern.search(translated):
+        translated_text = self._extract_text(data)
+        try:
+            response_json = json.loads(translated_text)
+            entries = response_json.get("translations", [])
+            if not isinstance(entries, list):
+                raise ValueError("No 'translations' array in response")
+        except (TypeError, ValueError, json.JSONDecodeError):
             logger.warning(
-                "OpenAI response still contains protected exception placeholders; restoring protected fragments after translation."
+                "OpenAI slide response was not valid JSON; falling back to per-item translation."
             )
-        return translated
+            raise TranslationError("OpenAI slide response was not valid JSON")
+
+        results: dict[str, str] = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            item_id = str(entry.get("id", ""))
+            item_text = entry.get("text")
+            if item_id and isinstance(item_text, str):
+                results[item_id] = self._restore_protected_replacements(item_text)
+        return results
+

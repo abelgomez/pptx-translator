@@ -128,17 +128,17 @@ class LocalArgosTranslator(BaseTranslator):
             argos_package.install_from_path(downloaded_path)
             _installed_pairs.add(pair)
 
-    def _translate_one(
+    def _translate_slide(
         self,
-        text: str,
+        texts: list[str],
         source_lang: str,
         target_lang: str,
         context: str | None = None,
-    ) -> str:
+    ) -> dict[str, str]:
         import argostranslate.translate as argos_translate
 
         _sync_argos_internal_logging()
 
         source = source_lang if source_lang not in ("", "auto") else "es"
         self._ensure_language_pair(source, target_lang)
-        return argos_translate.translate(text, source, target_lang)
+        return {text: argos_translate.translate(text, source, target_lang) for text in dict.fromkeys(texts)}

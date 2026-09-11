@@ -55,6 +55,7 @@ class TranslationJob:
     target: object  # _Paragraph for "paragraph"/"paragraph_run", TextFrame for "figure"
     original_text: str
     text_frame: object | None = None
+    slide_index: int = 0
     exception_replacements: dict[str, str] = field(default_factory=dict)
     run_segments: list[tuple[object, str, str, str]] = field(default_factory=list)
 
@@ -315,7 +316,7 @@ class PresentationTranslator:
         slide_width = prs.slide_width
         slide_height = prs.slide_height
 
-        for slide in prs.slides:
+        for slide_index, slide in enumerate(prs.slides):
             for shape, in_group in _iter_shapes_recursive(slide.shapes, False):
                 if getattr(shape, "has_table", False):
                     is_figure = in_group
@@ -323,7 +324,7 @@ class PresentationTranslator:
                         for cell in row.cells:
                             jobs.extend(
                                 self._collect_text_frame_jobs(
-                                    cell.text_frame, is_figure, stats
+                                    cell.text_frame, is_figure, stats, slide_index=slide_index
                                 )
                             )
                     continue
@@ -354,7 +355,7 @@ class PresentationTranslator:
                             f"'{text_frame.text[:40]!r}...' -> figure ({'; '.join(result.reasons)})"
                         )
 
-                jobs.extend(self._collect_text_frame_jobs(text_frame, is_figure, stats))
+                jobs.extend(self._collect_text_frame_jobs(text_frame, is_figure, stats, slide_index=slide_index))
 
             # Speaker notes are treated as regular content (never as a
             # figure): each paragraph is translated independently, keeping
@@ -364,13 +365,13 @@ class PresentationTranslator:
                 notes_text_frame = slide.notes_slide.notes_text_frame
                 if notes_text_frame.text.strip():
                     jobs.extend(
-                        self._collect_text_frame_jobs(notes_text_frame, False, stats)
+                        self._collect_text_frame_jobs(notes_text_frame, False, stats, slide_index=slide_index)
                     )
 
         return jobs
 
     def _collect_text_frame_jobs(
-        self, text_frame, is_figure: bool, stats: TranslationStats
+        self, text_frame, is_figure: bool, stats: TranslationStats, slide_index: int
     ) -> list[TranslationJob]:
         jobs: list[TranslationJob] = []
         if is_figure:
@@ -382,7 +383,15 @@ class PresentationTranslator:
             joined = _clean_joined_text(" ".join(pieces))
             if joined:
                 stats.figures_detected += 1
-                jobs.append(TranslationJob("figure", text_frame, joined, text_frame=text_frame))
+                jobs.append(
+                    TranslationJob(
+                        "figure",
+                        text_frame,
+                        joined,
+                        text_frame=text_frame,
+                        slide_index=slide_index,
+                    )
+                )
         else:
             for paragraph in text_frame.paragraphs:
                 if not _paragraph_has_text_run(paragraph):
@@ -399,14 +408,28 @@ class PresentationTranslator:
                     runs.append((run, plain, leading_ws, trailing_ws))
                 if len(runs) > 1:
                     for run, plain, leading_ws, trailing_ws in runs:
-                        job = TranslationJob("paragraph_run", paragraph, plain, text_frame=text_frame)
+                        job = TranslationJob(
+                            "paragraph_run",
+                            paragraph,
+                            plain,
+                            text_frame=text_frame,
+                            slide_index=slide_index,
+                        )
                         job.run_segments = [(run, plain, leading_ws, trailing_ws)]
                         jobs.append(job)
                     continue
 
                 plain = _paragraph_plain_text(paragraph)
                 if plain:
-                    jobs.append(TranslationJob("paragraph", paragraph, plain, text_frame=text_frame))
+                    jobs.append(
+                        TranslationJob(
+                            "paragraph",
+                            paragraph,
+                            plain,
+                            text_frame=text_frame,
+                            slide_index=slide_index,
+                        )
+                    )
         return jobs
 
     # -- Translation and writing ------------------------------------------
@@ -444,7 +467,7 @@ class PresentationTranslator:
         #    - '!'/'~' (strict) rules are protected with placeholder tokens
         #      so the translator cannot alter them, then restored verbatim
         #      once translation is complete.
-        #    Unique texts are then deduplicated to minimize API calls.
+        #    Texts are grouped per slide so the translation unit is the slide.
         for job in jobs:
             if self._pre_translation_rules:
                 job.original_text = apply_exception_rules(
@@ -457,13 +480,6 @@ class PresentationTranslator:
 
         unique_texts = {job.original_text for job in jobs}
         stats.unique_texts = len(unique_texts)
-        logger.info(
-            "Translating %d unique texts (out of %d units) from '%s' to '%s'...",
-            stats.unique_texts,
-            len(jobs),
-            resolved_source_lang,
-            target_lang,
-        )
         context = self._collect_first_slide_context(prs)
         protected_replacements = {
             token: value
@@ -475,13 +491,34 @@ class PresentationTranslator:
                 provider._protected_replacements = protected_replacements
         try:
             self.translator.on_presentation_start(context)
-            translations, failed_texts = self.translator.translate_many(
-                unique_texts,
-                resolved_source_lang,
-                target_lang,
-                fallback=self.fallback_translator,
-                context=context,
-            )
+            translations: dict[str, str] = {}
+            failed_texts = []
+            slide_jobs: dict[int, list[TranslationJob]] = {}
+            for job in jobs:
+                slide_jobs.setdefault(job.slide_index, []).append(job)
+
+            slide_count = len(prs.slides)
+            for slide_index in range(slide_count):
+                slide_job_list = slide_jobs.get(slide_index, [])
+                if not slide_job_list:
+                    continue
+
+                slide_texts = list(dict.fromkeys(job.original_text for job in slide_job_list))
+                logger.info(
+                    "Translating slide %d/%d (%d text units)...",
+                    slide_index + 1,
+                    slide_count,
+                    len(slide_texts),
+                )
+                slide_translations, slide_failed = self.translator.translate_slide(
+                    slide_texts,
+                    resolved_source_lang,
+                    target_lang,
+                    fallback=self.fallback_translator,
+                    context=context,
+                )
+                translations.update(slide_translations)
+                failed_texts.extend(slide_failed)
         finally:
             for provider in (self.translator, self.fallback_translator):
                 if provider is not None:

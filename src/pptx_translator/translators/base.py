@@ -17,7 +17,7 @@ class TranslationError(RuntimeError):
 class BaseTranslator(abc.ABC):
     """Base class providing retries, rate limiting and caching.
 
-    Subclasses only need to implement :meth:`_translate_one`. This class
+    Subclasses only need to implement :meth:`_translate_slide`. This class
     takes care of:
 
     * Not repeating calls for texts already translated (in-memory cache).
@@ -41,14 +41,14 @@ class BaseTranslator(abc.ABC):
         self._last_request_ts: float = 0.0
 
     @abc.abstractmethod
-    def _translate_one(
+    def _translate_slide(
         self,
-        text: str,
+        texts: Iterable[str],
         source_lang: str,
         target_lang: str,
         context: str | None = None,
-    ) -> str:
-        """Translates a single string. Must be implemented by each provider."""
+    ) -> dict[str, str]:
+        """Translates a batch of texts for a single slide. Must be implemented by each provider."""
 
     def on_presentation_start(self, context: str | None = None) -> None:
         """Hook called once when translating a presentation."""
@@ -68,7 +68,7 @@ class BaseTranslator(abc.ABC):
         target_lang: str,
         context: str | None = None,
     ) -> str:
-        """Translates ``text``, reusing the cache and retrying on failure."""
+        """Translates ``text`` by delegating to the single-slide implementation."""
 
         if not text or not text.strip():
             return text
@@ -81,21 +81,7 @@ class BaseTranslator(abc.ABC):
         for attempt in range(1, self.max_retries + 1):
             try:
                 self._throttle()
-                try:
-                    translated = self._translate_one(
-                        text,
-                        source_lang,
-                        target_lang,
-                        context=context,
-                    )
-                except TypeError as exc:
-                    if "context" not in str(exc):
-                        raise
-                    logger.debug(
-                        "[%s] Provider does not accept the optional context argument; retrying without context.",
-                        self.name,
-                    )
-                    translated = self._translate_one(text, source_lang, target_lang)
+                translated = self._translate_slide([text], source_lang, target_lang, context=context).get(text, text)
                 self._last_request_ts = time.monotonic()
                 if translated is None or translated == "":
                     translated = text
@@ -118,7 +104,7 @@ class BaseTranslator(abc.ABC):
             f"Could not translate the text after {self.max_retries} attempts: {last_error}"
         )
 
-    def translate_many(
+    def translate_slide(
         self,
         texts: Iterable[str],
         source_lang: str,
@@ -126,54 +112,56 @@ class BaseTranslator(abc.ABC):
         fallback: "BaseTranslator | None" = None,
         context: str | None = None,
     ) -> tuple[dict[str, str], list[str]]:
-        """Translates a collection of unique texts.
+        """Translates every text item in a single slide.
 
-        Returns a tuple ``(results, failed)`` where ``results`` is a
-        dictionary ``{original_text: translated_text}`` and ``failed`` is
-        the list of texts that could not be translated (not even with
-        ``fallback``, if one is provided), and therefore keep the original
-        text.
+        Returns ```(results, failed)`` where ``results`` maps the original text
+        to its translated value, and ``failed`` collects entries that could not
+        be translated even after trying the fallback provider.
         """
 
+        unique_texts = list(dict.fromkeys(texts))
         results: dict[str, str] = {}
         failed: list[str] = []
-        texts = list(dict.fromkeys(texts))  # remove duplicates while preserving order
-        total = len(texts)
-        for index, text in enumerate(texts, start=1):
-            try:
-                results[text] = self.translate(text, source_lang, target_lang, context=context)
-            except TranslationError as primary_exc:
-                translated = None
-                if fallback is not None:
-                    logger.warning(
-                        "[%s] Could not translate '%s...'; trying the fallback "
-                        "provider '%s'.",
-                        self.name,
-                        text[:60],
-                        fallback.name,
-                    )
-                    try:
-                        translated = fallback.translate(text, source_lang, target_lang, context=context)
-                    except TranslationError as fallback_exc:
-                        logger.error(
-                            "[%s] The fallback provider could not translate "
-                            "'%s...' either: %s",
-                            fallback.name,
+        total = len(unique_texts)
+
+        try:
+            translated_by_text = self._translate_slide(unique_texts, source_lang, target_lang, context=context)
+            for index, text in enumerate(unique_texts, start=1):
+                translated = translated_by_text.get(text, text)
+                results[text] = translated
+            return results, failed
+        except TranslationError as primary_exc:
+            for index, text in enumerate(unique_texts, start=1):
+                try:
+                    results[text] = self.translate(text, source_lang, target_lang, context=context)
+                except TranslationError as inner_exc:
+                    translated = None
+                    if fallback is not None:
+                        logger.warning(
+                            "[%s] Could not translate '%s...'; trying the fallback "
+                            "provider '%s'.",
+                            self.name,
                             text[:60],
-                            fallback_exc,
+                            fallback.name,
                         )
-                if translated is not None:
-                    results[text] = translated
-                else:
-                    # Don't abort the whole presentation because a single text
-                    # failed: keep the original text and continue with the rest.
-                    logger.error(
-                        "Could not translate '%s...'; keeping the original text. Cause: %s",
-                        text[:60],
-                        primary_exc,
-                    )
-                    results[text] = text
-                    failed.append(text)
-            if total >= 10 and index % 10 == 0:
-                logger.info("Translated %d/%d unique texts...", index, total)
-        return results, failed
+                        try:
+                            translated = fallback.translate(text, source_lang, target_lang, context=context)
+                        except TranslationError as fallback_exc:
+                            logger.error(
+                                "[%s] The fallback provider could not translate "
+                                "'%s...' either: %s",
+                                fallback.name,
+                                text[:60],
+                                fallback_exc,
+                            )
+                    if translated is not None:
+                        results[text] = translated
+                    else:
+                        logger.error(
+                            "Could not translate '%s...'; keeping the original text. Cause: %s",
+                            text[:60],
+                            inner_exc,
+                        )
+                        results[text] = text
+                        failed.append(text)
+            return results, failed

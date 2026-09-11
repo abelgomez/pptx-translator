@@ -181,8 +181,8 @@ class ParagraphRunFormattingTests(unittest.TestCase):
         class _StubTranslator(BaseTranslator):
             name = "stub"
 
-            def _translate_one(self, text, source_lang, target_lang):
-                return f"TR:{text}"
+            def _translate_slide(self, texts, source_lang, target_lang, context=None):
+                return {text: f"TR:{text}" for text in texts}
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             input_path = Path(tmp_dir) / "notes_test.pptx"
@@ -220,8 +220,8 @@ class ParagraphRunFormattingTests(unittest.TestCase):
         class _StubTranslator(BaseTranslator):
             name = "stub"
 
-            def _translate_one(self, text, source_lang, target_lang):
-                return f"TR:{text}"
+            def _translate_slide(self, texts, source_lang, target_lang, context=None):
+                return {text: f"TR:{text}" for text in texts}
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             input_path = Path(tmp_dir) / "textbox_test.pptx"
