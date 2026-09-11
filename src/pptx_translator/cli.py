@@ -397,7 +397,7 @@ def main(argv: list[str] | None = None) -> int:
                         output_path,
                     )
                 else:
-                    logger.warning(
+                    logger.info(
                         "Dry run: translation would be written to '%s'.",
                         output_path,
                     )
