@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import signal
 import sys
 from pathlib import Path
 
@@ -231,160 +232,172 @@ def _log_active_configuration(logger: logging.Logger, settings, provider_name: s
         logger.debug("Configured API key: %s", _mask_secret(settings.api_key))
 
 
+def _handle_sigint(signum: int, frame) -> None:
+    """Translate Ctrl+C/SIGINT into a clean user-abort path."""
+    raise KeyboardInterrupt(f"Received signal {signum}")
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = build_arg_parser()
-    args = parser.parse_args(argv)
+    try:
+        if hasattr(signal, "SIGINT"):
+            signal.signal(signal.SIGINT, _handle_sigint)
 
-    settings = load_settings()
-    log_level = _resolve_log_level(args.verbose, settings.log_level)
+        parser = build_arg_parser()
+        args = parser.parse_args(argv)
 
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%H:%M:%S",
-        force=True,
-    )
-    logger = logging.getLogger("pptx_translator.cli")
+        settings = load_settings()
+        log_level = _resolve_log_level(args.verbose, settings.log_level)
 
-    input_path: Path = args.input
-    if not input_path.exists():
-        logger.error("Input path does not exist: %s", input_path)
-        return 1
+        logging.basicConfig(
+            level=log_level,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%H:%M:%S",
+            force=True,
+        )
+        logger = logging.getLogger("pptx_translator.cli")
 
-    exception_rules = []
-    if args.exceptions is not None:
-        if not args.exceptions.exists():
-            logger.error("Exceptions file does not exist: %s", args.exceptions)
+        input_path: Path = args.input
+        if not input_path.exists():
+            logger.error("Input path does not exist: %s", input_path)
             return 1
+
+        exception_rules = []
+        if args.exceptions is not None:
+            if not args.exceptions.exists():
+                logger.error("Exceptions file does not exist: %s", args.exceptions)
+                return 1
+            try:
+                exception_rules = load_exception_rules(args.exceptions)
+            except ValueError as exc:
+                logger.error(str(exc))
+                return 1
+            logger.info(
+                "Loaded %d translation exception rule(s) from %s",
+                len(exception_rules),
+                args.exceptions,
+            )
+
         try:
-            exception_rules = load_exception_rules(args.exceptions)
+            translator = create_translator(
+                settings,
+                provider=args.provider,
+                api_key=args.api_key,
+                api_base_url=args.api_base_url,
+                model=args.model,
+                request_delay_seconds=args.request_delay,
+            )
         except ValueError as exc:
             logger.error(str(exc))
             return 1
-        logger.info(
-            "Loaded %d translation exception rule(s) from %s",
-            len(exception_rules),
-            args.exceptions,
-        )
 
-    try:
-        translator = create_translator(
-            settings,
-            provider=args.provider,
-            api_key=args.api_key,
-            api_base_url=args.api_base_url,
-            model=args.model,
-            request_delay_seconds=args.request_delay,
-        )
-    except ValueError as exc:
-        logger.error(str(exc))
-        return 1
+        _log_active_configuration(logger, settings, translator.name)
 
-    _log_active_configuration(logger, settings, translator.name)
+        if input_path.is_file():
+            if input_path.suffix.lower() != ".pptx":
+                logger.error("Input file must be a .pptx: %s", input_path)
+                return 1
+            files_to_process = [input_path]
+        else:
+            files_to_process = _iter_pptx_files(input_path, args.recursive)
+            if not files_to_process:
+                logger.error(
+                    "No .pptx files found in directory '%s' (recursive=%s).",
+                    input_path,
+                    args.recursive,
+                )
+                return 1
 
-    if input_path.is_file():
-        if input_path.suffix.lower() != ".pptx":
-            logger.error("Input file must be a .pptx: %s", input_path)
-            return 1
-        files_to_process = [input_path]
-    else:
-        files_to_process = _iter_pptx_files(input_path, args.recursive)
-        if not files_to_process:
-            logger.error(
-                "No .pptx files found in directory '%s' (recursive=%s).",
-                input_path,
-                args.recursive,
-            )
-            return 1
-
-    total_failed = 0
-    for index, file_path in enumerate(files_to_process, start=1):
-        if _should_skip_translation(file_path, args.target):
-            logger.warning(
-                "Skipping file '%s': it already ends with the target-language suffix '_%s'.",
-                file_path,
-                args.target.lower(),
-            )
-            continue
-
-        output_path = _default_output_path(file_path, args.target)
-
-        logger.info(
-            "[%d/%d] Translation provider: %s | Input: %s | Output: %s | Target: %s",
-            index,
-            len(files_to_process),
-            translator.name,
-            file_path,
-            output_path,
-            args.target,
-        )
-
-        if args.dry_run:
-            if output_path.exists():
+        total_failed = 0
+        for index, file_path in enumerate(files_to_process, start=1):
+            if _should_skip_translation(file_path, args.target):
                 logger.warning(
-                    "Dry run: file '%s' already exists and would be overwritten.",
-                    output_path,
+                    "Skipping file '%s': it already ends with the target-language suffix '_%s'.",
+                    file_path,
+                    args.target.lower(),
+                )
+                continue
+
+            output_path = _default_output_path(file_path, args.target)
+
+            logger.info(
+                "[%d/%d] Translation provider: %s | Input: %s | Output: %s | Target: %s",
+                index,
+                len(files_to_process),
+                translator.name,
+                file_path,
+                output_path,
+                args.target,
+            )
+
+            if args.dry_run:
+                if output_path.exists():
+                    logger.warning(
+                        "Dry run: file '%s' already exists and would be overwritten.",
+                        output_path,
+                    )
+                else:
+                    logger.warning(
+                        "Dry run: translation would be written to '%s'.",
+                        output_path,
+                    )
+                continue
+
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            presentation_translator = PresentationTranslator(
+                translator,
+                exception_rules=exception_rules,
+                remove_audio=args.remove_audio or settings.remove_audio,
+            )
+            try:
+                stats = presentation_translator.translate(
+                    str(file_path),
+                    str(output_path),
+                    target_lang=args.target,
+                    source_lang=args.source,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Error translating the presentation '%s': %s", file_path, exc)
+                total_failed += 1
+                continue
+
+            logger.info("Detected/used source language: %s", stats.detected_source_lang)
+            logger.info("Slides processed: %d", stats.slides)
+            logger.info("Audio elements removed: %d", stats.audio_removed)
+            logger.info("Text boxes treated as figures: %d", stats.figures_detected)
+            logger.info(
+                "Unique texts translated: %d (total units rewritten: %d)",
+                stats.unique_texts,
+                stats.translated_units,
+            )
+            if stats.failed_texts:
+                logger.warning(
+                    "%d text(s) could not be translated and were left in the original language.",
+                    stats.failed_texts,
+                )
+            if log_level <= logging.DEBUG:
+                for reason in stats.reasons_log:
+                    logger.debug("Figure heuristic: %s", reason)
+            logger.info("Translated presentation saved to: %s", output_path)
+
+        if len(files_to_process) > 1:
+            if args.dry_run:
+                logger.info(
+                    "Batch dry run complete: %d file(s) would be processed, %d error(s).",
+                    len(files_to_process),
+                    total_failed,
                 )
             else:
-                logger.warning(
-                    "Dry run: translation would be written to '%s'.",
-                    output_path,
+                logger.info(
+                    "Batch complete: %d file(s) processed, %d error(s).",
+                    len(files_to_process),
+                    total_failed,
                 )
-            continue
 
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        presentation_translator = PresentationTranslator(
-            translator,
-            exception_rules=exception_rules,
-            remove_audio=args.remove_audio or settings.remove_audio,
-        )
-        try:
-            stats = presentation_translator.translate(
-                str(file_path),
-                str(output_path),
-                target_lang=args.target,
-                source_lang=args.source,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Error translating the presentation '%s': %s", file_path, exc)
-            total_failed += 1
-            continue
-
-        logger.info("Detected/used source language: %s", stats.detected_source_lang)
-        logger.info("Slides processed: %d", stats.slides)
-        logger.info("Audio elements removed: %d", stats.audio_removed)
-        logger.info("Text boxes treated as figures: %d", stats.figures_detected)
-        logger.info(
-            "Unique texts translated: %d (total units rewritten: %d)",
-            stats.unique_texts,
-            stats.translated_units,
-        )
-        if stats.failed_texts:
-            logger.warning(
-                "%d text(s) could not be translated and were left in the original language.",
-                stats.failed_texts,
-            )
-        if log_level <= logging.DEBUG:
-            for reason in stats.reasons_log:
-                logger.debug("Figure heuristic: %s", reason)
-        logger.info("Translated presentation saved to: %s", output_path)
-
-    if len(files_to_process) > 1:
-        if args.dry_run:
-            logger.info(
-                "Batch dry run complete: %d file(s) would be processed, %d error(s).",
-                len(files_to_process),
-                total_failed,
-            )
-        else:
-            logger.info(
-                "Batch complete: %d file(s) processed, %d error(s).",
-                len(files_to_process),
-                total_failed,
-            )
-
-    return 1 if total_failed == len(files_to_process) else 0
+        return 1 if total_failed == len(files_to_process) else 0
+    except KeyboardInterrupt:
+        print("Execution aborted by the user", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

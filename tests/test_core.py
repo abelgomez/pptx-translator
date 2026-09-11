@@ -1,3 +1,4 @@
+import io
 import sys
 from pathlib import Path
 
@@ -113,6 +114,18 @@ class ExceptionRulesTests(unittest.TestCase):
     def test_invalid_line_raises(self):
         with self.assertRaises(ValueError):
             self._rules_from_text("this line has no separator\n")
+
+
+class CLIInterruptTests(unittest.TestCase):
+    def test_main_reports_abort_without_stacktrace(self):
+        import pptx_translator.cli as cli_module
+
+        with patch("pptx_translator.cli.build_arg_parser", side_effect=KeyboardInterrupt):
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = cli_module.main([])
+
+        self.assertEqual(exit_code, 130)
+        self.assertIn("Execution aborted by the user", stderr.getvalue())
 
 
 class LogLevelResolutionTests(unittest.TestCase):
