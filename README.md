@@ -224,7 +224,7 @@ The application supports two providers:
 
 - `local` (default): the offline Argos Translate engine.
 - `openai`: any OpenAI-compatible API endpoint.
-  > AI-based translations can offer greater consistency and overall quality, and they often respect the original formatting and code/symbol-heavy syntax better than a purely local backend. The remote provider is optimized to reduce waste by batching each slide into a single request, but it still consumes more CPU/network resources than the default local backend.
+  > AI-based translations can offer greater consistency, overall better quality, and they often respect the original formatting and code/symbol-heavy syntax better than a purely local backend. The OpenAI-compatible translation provider is optimized to reduce computing by batching each slide into a single request, but it still consumes more CPU/network resources than the default local backend.
   >
   > **DISCLAIMER:** the OpenAI-compatible backend is experimental and should be used with caution. **It is typically much slower and more expensive than the local Argos backend**, especially when a presentation contains many slides or very large slide payloads. Even with slide-level batching, the larger the presentation and the more content per slide, the higher the **latency and API cost** remain.
 
