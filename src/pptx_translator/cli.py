@@ -6,6 +6,7 @@ import argparse
 import logging
 import signal
 import sys
+import time
 from pathlib import Path
 
 from .config import load_settings
@@ -251,6 +252,52 @@ def _handle_sigint(signum: int, frame) -> None:
     raise KeyboardInterrupt(f"Received signal {signum}")
 
 
+def _translate_with_retries(
+    logger: logging.Logger,
+    presentation_translator,
+    file_path: Path,
+    output_path: Path,
+    target_lang: str,
+    source_lang: str | None,
+    max_attempts: int = 5,
+    initial_delay_seconds: int = 2,
+):
+    """Retries a single presentation translation without dumping a traceback."""
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return presentation_translator.translate(
+                str(file_path),
+                str(output_path),
+                target_lang=target_lang,
+                source_lang=source_lang,
+            )
+        except Exception as exc:  # noqa: BLE001
+            if attempt == max_attempts:
+                logger.error(
+                    "Failed to translate '%s' after %d attempt(s): %s: %s",
+                    file_path,
+                    max_attempts,
+                    type(exc).__name__,
+                    exc,
+                )
+                return None
+
+            delay_seconds = initial_delay_seconds * (2 ** (attempt - 1))
+            logger.warning(
+                "Attempt %d/%d failed for '%s': %s: %s. Retrying in %d second(s)...",
+                attempt,
+                max_attempts,
+                file_path,
+                type(exc).__name__,
+                exc,
+                delay_seconds,
+            )
+            time.sleep(delay_seconds)
+
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         if hasattr(signal, "SIGINT"):
@@ -364,15 +411,15 @@ def main(argv: list[str] | None = None) -> int:
                 remove_audio=args.remove_audio or settings.remove_audio,
                 flatten_inline_formatting=args.flatten_inline_formatting or settings.flatten_inline_formatting,
             )
-            try:
-                stats = presentation_translator.translate(
-                    str(file_path),
-                    str(output_path),
-                    target_lang=args.target,
-                    source_lang=args.source,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("Error translating the presentation '%s': %s", file_path, exc)
+            stats = _translate_with_retries(
+                logger,
+                presentation_translator,
+                file_path,
+                output_path,
+                args.target,
+                args.source,
+            )
+            if stats is None:
                 total_failed += 1
                 continue
 

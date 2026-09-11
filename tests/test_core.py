@@ -4,7 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -125,6 +125,28 @@ class CLIInterruptAndLogTests(unittest.TestCase):
     def test_verbose_flags_override_configured_level(self):
         self.assertEqual(_resolve_log_level(1, "ERROR"), logging.INFO)
         self.assertEqual(_resolve_log_level(2, "ERROR"), logging.DEBUG)
+
+    def test_translation_retries_five_times_with_incremental_backoff(self):
+        from pptx_translator.cli import _translate_with_retries
+
+        fake_translator = unittest.mock.Mock()
+        fake_translator.translate.side_effect = RuntimeError("temporary failure")
+
+        with patch("pptx_translator.cli.time.sleep") as sleep_mock:
+            result = _translate_with_retries(
+                unittest.mock.Mock(),
+                fake_translator,
+                Path("demo.pptx"),
+                Path("demo_en.pptx"),
+                "en",
+                None,
+                max_attempts=5,
+                initial_delay_seconds=2,
+            )
+
+        self.assertIsNone(result)
+        self.assertEqual(fake_translator.translate.call_count, 5)
+        self.assertEqual(sleep_mock.call_args_list, [call(2), call(4), call(8), call(16)])
 
 
 class PresentationFormattingTests(unittest.TestCase):
