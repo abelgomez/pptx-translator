@@ -20,6 +20,11 @@ slightly when PowerPoint reflows content. Even so, it is often a very
 helpful way to speed up the first translation pass on technical or academic
 presentations.
 
+## License
+
+This project is licensed under the GNU Lesser General Public License v3.0 or
+later (LGPL-3.0-or-later). See [LICENSE](LICENSE) for the full text.
+
 ## Key features
 
 - **Automatic source-language detection.** You only need to specify the
@@ -94,6 +99,7 @@ presentations.
 
 ```
 pptx-translator/
+├── LICENSE                       # LGPL-3.0-or-later
 ├── translate_pptx.py            # Entry-point script
 ├── requirements.txt              # Python dependencies
 ├── .env.example                  # Example configuration (copy to .env)
