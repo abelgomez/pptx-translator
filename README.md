@@ -1,4 +1,4 @@
-# pptx-translator
+# PowerPoint PPTX Translator
 
 A Python command-line tool that translates PowerPoint (`.pptx`) presentations
 **while preserving the original formatting** (fonts, sizes, colors,
